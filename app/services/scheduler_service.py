@@ -111,9 +111,12 @@ class ProactiveScheduler:
             if not user_time:
                 user_time = "07:45"
             
-            target_time = datetime.strptime(user_time, "%H:%M").time()
+            logger.debug(f"[Morning Summary] Raw DB time: {user_time} (type: {type(user_time).__name__})")
+            target_time = parse_time_safe(user_time, "07:45")
+            logger.debug(f"[Morning Summary] Parsed target time: {target_time}")
             
             if now_bkk.time() >= target_time:
+                logger.info(f"[Morning Summary] Time reached ({now_bkk.time()} >= {target_time}), running for user {user.get('id')}")
                 try:
                     await self._run_morning_summary_for_user(user)
                     logger.info(f"Morning summary sent to user {user.get('id')}")
@@ -147,9 +150,12 @@ class ProactiveScheduler:
             if not user_time:
                 user_time = "20:00"
             
-            target_time = datetime.strptime(user_time, "%H:%M").time()
+            logger.debug(f"[Daily Summary] Raw DB time: {user_time} (type: {type(user_time).__name__})")
+            target_time = parse_time_safe(user_time, "20:00")
+            logger.debug(f"[Daily Summary] Parsed target time: {target_time}")
             
             if now_bkk.time() >= target_time:
+                logger.info(f"[Daily Summary] Time reached ({now_bkk.time()} >= {target_time}), running for user {user.get('id')}")
                 try:
                     await self._run_daily_summary_for_user(user)
                     logger.info(f"Daily summary sent to user {user.get('id')}")
