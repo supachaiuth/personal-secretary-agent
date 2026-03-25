@@ -4,10 +4,12 @@ Provides natural conversation when no command is detected.
 """
 import os
 import httpx
+import logging
 from typing import Optional, List, Dict, Any
 from app.config import Settings
 
 _settings = Settings()
+logger = logging.getLogger(__name__)
 
 # In-memory conversation history per user
 # Format: {line_user_id: [{"role": "user"/"assistant", "content": "..."}]}
@@ -73,11 +75,6 @@ def build_messages(
         "content": get_system_prompt()
     })
     
-    # Add user context as first message if available
-    if user_name and user_name != "คุณ":
-        context_note = f"(Context: คุณกำลังคุยกับ {user_name})"
-        # We can add this as a system message or include in first user message
-    
     # Add conversation history
     history = get_conversation_history(line_user_id)
     for msg in history:
@@ -99,32 +96,20 @@ def generate_chat_response(
     user_role: str = "partner"
 ) -> str:
     """
-    Generate a chat response using LLM.
+    Generate a chat response using OpenAI API.
     
     This is used for Assistant Chat Mode when no command is detected.
-    Supports both standard OpenAI and Azure OpenAI.
     """
+    logger.info(f"[LLMChat] generate_chat_response called with: {user_message[:30]}...")
+    
     if not _settings.openai_api_key:
+        logger.error("[LLMChat] No OpenAI API key configured")
         return "ขอโทษครับ ตอนนี้ระบบ AI ยังไม่พร้อม ลองใหม่อีกครั้งนะครับ"
     
     # Build messages
     messages = build_messages(user_message, line_user_id, user_name, user_role)
     
-    # Check if using Azure OpenAI
-    if _settings.llm_provider == "azure" and _settings.azure_openai_endpoint:
-        return _generate_azure_response(messages, line_user_id, user_message)
-    else:
-        return _generate_openai_response(messages, line_user_id, user_message)
-
-
-def _generate_openai_response(
-    messages: List[Dict[str, str]],
-    line_user_id: str,
-    user_message: str
-) -> str:
-    """Generate response using standard OpenAI API."""
-    import logging
-    logger = logging.getLogger(__name__)
+    logger.info(f"[LLMChat] Using OpenAI API with model: {_settings.openai_model or 'gpt-4'}")
     
     url = "https://api.openai.com/v1/chat/completions"
     headers = {
@@ -139,6 +124,7 @@ def _generate_openai_response(
     }
     
     try:
+        logger.info(f"[LLMChat] Sending request to OpenAI...")
         response = httpx.post(url, json=payload, headers=headers, timeout=30)
         logger.info(f"[LLMChat] OpenAI response status: {response.status_code}")
         
@@ -150,63 +136,11 @@ def _generate_openai_response(
             add_to_history(line_user_id, "user", user_message)
             add_to_history(line_user_id, "assistant", assistant_reply)
             
-            logger.info(f"[LLMChat] OpenAI response: {assistant_reply[:50]}...")
+            logger.info(f"[LLMChat] OpenAI response received: {assistant_reply[:50]}...")
             return assistant_reply
         else:
-            logger.error(f"[LLMChat] OpenAI error: {response.text}")
+            logger.error(f"[LLMChat] OpenAI error: {response.status_code} - {response.text}")
             return "ขอโทษครับ ตอนนี้ตอบไม่ได้ ลองใหม่อีกครั้งนะครับ"
     except Exception as e:
-        logger.error(f"[LLMChat] OpenAI error: {e}")
-        return "ขอโทษครับ ตอนนี้มีปัญหา ลองใหม่อีกครั้งนะครับ"
-
-
-def _generate_azure_response(
-    messages: List[Dict[str, str]],
-    line_user_id: str,
-    user_message: str
-) -> str:
-    """Generate response using Azure OpenAI API."""
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    # Azure OpenAI endpoint format:
-    # https://{resource}.openai.azure.com/openai/deployments/{deployment}/chat/completions?api-version={version}
-    endpoint = _settings.azure_openai_endpoint.rstrip("/")
-    deployment = _settings.azure_openai_deployment
-    api_version = _settings.azure_openai_api_version or "2024-02-15-preview"
-    
-    url = f"{endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version}"
-    
-    headers = {
-        "api-key": _settings.openai_api_key,
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "messages": messages,
-        "temperature": 0.7,
-        "max_tokens": 500
-    }
-    
-    logger.info(f"[LLMChat] Using Azure OpenAI: {endpoint}")
-    
-    try:
-        response = httpx.post(url, json=payload, headers=headers, timeout=30)
-        logger.info(f"[LLMChat] Azure response status: {response.status_code}")
-        
-        if response.status_code == 200:
-            data = response.json()
-            assistant_reply = data["choices"][0]["message"]["content"]
-            
-            # Add to history
-            add_to_history(line_user_id, "user", user_message)
-            add_to_history(line_user_id, "assistant", assistant_reply)
-            
-            logger.info(f"[LLMChat] Azure response: {assistant_reply[:50]}...")
-            return assistant_reply
-        else:
-            logger.error(f"[LLMChat] Azure error: {response.status_code} - {response.text}")
-            return "ขอโทษครับ ตอนนี้ตอบไม่ได้ ลองใหม่อีกครั้งนะครับ"
-    except Exception as e:
-        logger.error(f"[LLMChat] Azure error: {e}")
+        logger.error(f"[LLMChat] OpenAI exception: {e}")
         return "ขอโทษครับ ตอนนี้มีปัญหา ลองใหม่อีกครั้งนะครับ"

@@ -151,11 +151,8 @@ SUPABASE_URL=https://your-project.supabase.co
 SUPABASE_KEY=your-anon-key
 LINE_CHANNEL_SECRET=your-line-secret
 LINE_CHANNEL_ACCESS_TOKEN=your-line-token
-LLM_PROVIDER=azure
-OPENAI_API_KEY=your-azure-key
-AZURE_OPENAI_ENDPOINT=https://your-resource.openai.azure.com
-AZURE_OPENAI_DEPLOYMENT=gpt-4
-AZURE_OPENAI_API_VERSION=2024-02-15-preview
+OPENAI_API_KEY=your-openai-api-key
+OPENAI_MODEL=gpt-4
 ```
 
 ### Health Check
