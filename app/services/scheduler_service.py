@@ -107,6 +107,13 @@ class ProactiveScheduler:
         self._last_advance_run: Optional[date] = None
         self._last_daily_run: Optional[date] = None
     
+    def reset_daily_state(self):
+        """Reset daily run state - useful for testing"""
+        self._last_morning_run = None
+        self._last_advance_run = None
+        self._last_daily_run = None
+        logger.info("[SCHEDULER] Daily state reset for testing")
+    
     async def start(self):
         """Start the scheduler."""
         self.is_running = True
@@ -139,8 +146,10 @@ class ProactiveScheduler:
     
     async def check_and_run_morning_summary(self, now_bkk: datetime, today: date):
         """Run morning summary at configured time (default 07:45)."""
+        logger.info(f"[SCHEDULER] morning_summary check: bangkok_date={today} _last_morning_run={self._last_morning_run}")
+        
         if self._last_morning_run == today:
-            logger.info(f"[SCHEDULER] morning_summary skipped_today_already_run")
+            logger.info(f"[SCHEDULER] morning_summary skipped_today_already_run _last_morning_run={self._last_morning_run}")
             return
         
         users = self._get_users_with_morning_enabled()
@@ -192,8 +201,10 @@ class ProactiveScheduler:
     
     async def check_and_run_daily_summary(self, now_bkk: datetime, today: date):
         """Run daily summary at configurable time (default 20:00)."""
+        logger.info(f"[SCHEDULER] daily_summary check: bangkok_date={today} _last_daily_run={self._last_daily_run}")
+        
         if self._last_daily_run == today:
-            logger.info(f"[SCHEDULER] daily_summary skipped_today_already_run")
+            logger.info(f"[SCHEDULER] daily_summary skipped_today_already_run _last_daily_run={self._last_daily_run}")
             return
         
         users = self._get_users_with_daily_enabled()
