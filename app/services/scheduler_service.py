@@ -114,15 +114,19 @@ class ProactiveScheduler:
         
         while self.is_running:
             try:
+                now_utc = datetime.utcnow()
                 now_bkk = datetime.now(BANGKOK_TZ)
                 today = now_bkk.date()
+                
+                logger.info(f"[SCHEDULER] raw_server_time={now_utc.isoformat()} UTC")
+                logger.info(f"[SCHEDULER] bangkok_time={now_bkk.isoformat()} Asia/Bangkok")
                 
                 await self.check_and_run_morning_summary(now_bkk, today)
                 await self.check_and_run_advance_reminders(now_bkk, today)
                 await self.check_and_run_daily_summary(now_bkk, today)
                 
                 await self.check_due_reminders()
-                
+            
             except Exception as e:
                 logger.error(f"Scheduler error: {e}")
             
@@ -136,25 +140,39 @@ class ProactiveScheduler:
     async def check_and_run_morning_summary(self, now_bkk: datetime, today: date):
         """Run morning summary at configured time (default 07:45)."""
         if self._last_morning_run == today:
+            logger.info(f"[SCHEDULER] morning_summary skipped_today_already_run")
             return
         
         users = self._get_users_with_morning_enabled()
+        
+        if not users:
+            logger.info(f"[SCHEDULER] morning_summary no_users_with_enabled")
+        
         for user in users:
+            user_id = user.get("id")
+            morning_enabled = user.get("morning_summary_enabled")
             user_time = user.get("morning_summary_time")
+            
             if not user_time:
                 user_time = "07:45"
             
-            logger.debug(f"[Morning Summary] Raw DB time: {user_time} (type: {type(user_time).__name__})")
-            target_time = parse_time_safe(user_time, "07:45")
-            logger.debug(f"[Morning Summary] Parsed target time: {target_time}")
+            logger.info(f"[SCHEDULER] user_id={user_id} morning_enabled={morning_enabled} morning_time_raw={user_time}")
             
-            if now_bkk.time() >= target_time:
-                logger.info(f"[Morning Summary] Time reached ({now_bkk.time()} >= {target_time}), running for user {user.get('id')}")
+            target_time = parse_time_safe(user_time, "07:45")
+            logger.info(f"[SCHEDULER] user_id={user_id} parsed_morning_time={target_time}")
+            
+            current_time = now_bkk.time()
+            logger.info(f"[SCHEDULER] user_id={user_id} job=morning_summary current_time={current_time} target_time={target_time}")
+            
+            if current_time >= target_time:
+                logger.info(f"[SCHEDULER] user_id={user_id} job=morning_summary match=true")
                 try:
                     await self._run_morning_summary_for_user(user)
-                    logger.info(f"Morning summary sent to user {user.get('id')}")
+                    logger.info(f"[SCHEDULER] user_id={user_id} job=morning_summary send=success")
                 except Exception as e:
-                    logger.error(f"Error sending morning summary: {e}")
+                    logger.error(f"[SCHEDULER] user_id={user_id} job=morning_summary send=failed error={e}")
+            else:
+                logger.info(f"[SCHEDULER] user_id={user_id} job=morning_summary match=false reason=current_time_before_target")
         
         self._last_morning_run = today
     
@@ -175,25 +193,39 @@ class ProactiveScheduler:
     async def check_and_run_daily_summary(self, now_bkk: datetime, today: date):
         """Run daily summary at configurable time (default 20:00)."""
         if self._last_daily_run == today:
+            logger.info(f"[SCHEDULER] daily_summary skipped_today_already_run")
             return
         
         users = self._get_users_with_daily_enabled()
+        
+        if not users:
+            logger.info(f"[SCHEDULER] daily_summary no_users_with_enabled")
+        
         for user in users:
+            user_id = user.get("id")
+            daily_enabled = user.get("daily_summary_enabled")
             user_time = user.get("daily_summary_time")
+            
             if not user_time:
                 user_time = "20:00"
             
-            logger.debug(f"[Daily Summary] Raw DB time: {user_time} (type: {type(user_time).__name__})")
-            target_time = parse_time_safe(user_time, "20:00")
-            logger.debug(f"[Daily Summary] Parsed target time: {target_time}")
+            logger.info(f"[SCHEDULER] user_id={user_id} daily_enabled={daily_enabled} daily_time_raw={user_time}")
             
-            if now_bkk.time() >= target_time:
-                logger.info(f"[Daily Summary] Time reached ({now_bkk.time()} >= {target_time}), running for user {user.get('id')}")
+            target_time = parse_time_safe(user_time, "20:00")
+            logger.info(f"[SCHEDULER] user_id={user_id} parsed_daily_time={target_time}")
+            
+            current_time = now_bkk.time()
+            logger.info(f"[SCHEDULER] user_id={user_id} job=daily_summary current_time={current_time} target_time={target_time}")
+            
+            if current_time >= target_time:
+                logger.info(f"[SCHEDULER] user_id={user_id} job=daily_summary match=true")
                 try:
                     await self._run_daily_summary_for_user(user)
-                    logger.info(f"Daily summary sent to user {user.get('id')}")
+                    logger.info(f"[SCHEDULER] user_id={user_id} job=daily_summary send=success")
                 except Exception as e:
-                    logger.error(f"Error sending daily summary: {e}")
+                    logger.error(f"[SCHEDULER] user_id={user_id} job=daily_summary send=failed error={e}")
+            else:
+                logger.info(f"[SCHEDULER] user_id={user_id} job=daily_summary match=false reason=current_time_before_target")
         
         self._last_daily_run = today
     
