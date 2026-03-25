@@ -1,0 +1,219 @@
+"""
+Memory manager for tracking user conversation context.
+Supports follow-up handling and persistent context across messages.
+"""
+from typing import Optional, Dict, Any
+from datetime import datetime, timedelta
+import logging
+
+logger = logging.getLogger(__name__)
+
+# In-memory storage for user sessions
+# In production, this should be stored in Redis or database
+_user_sessions: Dict[str, Dict[str, Any]] = {}
+
+# Session timeout in minutes
+SESSION_TIMEOUT = 10
+
+
+class UserSession:
+    """Represents a user's conversation session."""
+    
+    def __init__(self, line_user_id: str):
+        self.line_user_id = line_user_id
+        self.pending_action: Optional[str] = None  # e.g., "create_reminder", "add_task"
+        self.current_intent: Optional[str] = None
+        self.pending_fields: Dict[str, str] = {}
+        self.collected_fields: Dict[str, Any] = {}
+        self.last_message: str = ""
+        self.last_update: datetime = datetime.now()
+        self.context_history: list = []
+    
+    def update(self, pending_action: str = None, intent: str = None, needs_clarification: bool = False, collected_fields: Dict = None):
+        """Update session with new action/intent information."""
+        if pending_action:
+            self.pending_action = pending_action
+        self.current_intent = intent
+        self.collected_fields = collected_fields or {}
+        self.last_update = datetime.now()
+        
+        if needs_clarification:
+            # Extract missing fields from the message
+            pass
+    
+    def add_context(self, message: str, response: str):
+        """Add to conversation history."""
+        self.context_history.append({
+            "user": message,
+            "assistant": response,
+            "timestamp": datetime.now().isoformat()
+        })
+        # Keep only last 5 context items
+        if len(self.context_history) > 5:
+            self.context_history = self.context_history[-5:]
+    
+    def is_expired(self) -> bool:
+        """Check if session has expired."""
+        return datetime.now() - self.last_update > timedelta(minutes=SESSION_TIMEOUT)
+    
+    def clear(self):
+        """Clear the session."""
+        self.pending_action = None
+        self.current_intent = None
+        self.pending_fields = {}
+        self.collected_fields = {}
+        self.context_history = []
+    
+    def to_dict(self) -> Dict:
+        """Convert session to dictionary."""
+        return {
+            "line_user_id": self.line_user_id,
+            "pending_action": self.pending_action,
+            "current_intent": self.current_intent,
+            "pending_fields": self.pending_fields,
+            "collected_fields": self.collected_fields,
+            "last_message": self.last_message,
+            "last_update": self.last_update.isoformat(),
+            "context_history": self.context_history
+        }
+
+
+def get_session(line_user_id: str) -> UserSession:
+    """Get or create a session for a user."""
+    if line_user_id not in _user_sessions:
+        _user_sessions[line_user_id] = UserSession(line_user_id)
+    
+    session = _user_sessions[line_user_id]
+    
+    # Check if session expired
+    if session.is_expired():
+        logger.info(f"Session expired for {line_user_id}, creating new one")
+        _user_sessions[line_user_id] = UserSession(line_user_id)
+        session = _user_sessions[line_user_id]
+    
+    return session
+
+
+def update_session(
+    line_user_id: str,
+    pending_action: str = None,
+    intent: str = None,
+    needs_clarification: bool = False,
+    user_message: str = "",
+    collected_fields: Optional[Dict] = None
+):
+    """Update user session with new action/intent."""
+    session = get_session(line_user_id)
+    
+    # New action - update session
+    if pending_action:
+        session.pending_action = pending_action
+    if intent:
+        session.current_intent = intent
+    
+    session.collected_fields = collected_fields or {}
+    session.last_message = user_message
+    session.last_update = datetime.now()
+    
+    logger.info(f"Session updated for {line_user_id}: pending_action={pending_action}, intent={intent}, needs_clarification={needs_clarification}")
+    return session
+
+
+def _is_followup_message(previous_intent: str, current_message: str) -> bool:
+    """Check if current message is a follow-up to complete previous intent."""
+    if previous_intent == "reminder":
+        # Check if message contains time or date
+        time_keywords = ["โมง", "นาฬิกา", "วัน", "เดือน", "บ่าย", "เช้า", "เย็น", "กี่"]
+        return any(kw in current_message for kw in time_keywords)
+    
+    if previous_intent == "task":
+        # Check if message seems to be a task title
+        return len(current_message) > 0 and len(current_message) < 100
+    
+    if previous_intent == "pantry":
+        # Check if message seems to be an item name
+        return len(current_message) > 0 and len(current_message) < 50
+    
+    return False
+
+
+def _extract_fields_from_followup(
+    previous_intent: str, 
+    current_message: str,
+    existing_fields: Dict
+) -> Optional[Dict]:
+    """Extract fields from follow-up message."""
+    message = current_message.lower().strip()
+    extracted = {}
+    
+    if previous_intent == "reminder":
+        # Extract time
+        import re
+        
+        # Pattern for time: X โมง, X:00, etc.
+        time_match = re.search(r'(\d{1,2})\s*โมง', message)
+        if time_match:
+            extracted["time"] = time_match.group(1)
+        
+        # Pattern for date: พรุ่งนี้, วันนี้, วันจันทร์, etc.
+        if "พรุ่งนี้" in message or "วันพรุ่ง" in message:
+            extracted["date"] = "tomorrow"
+        elif "วันนี้" in message:
+            extracted["date"] = "today"
+        elif "มะรืนนี้" in message:
+            extracted["date"] = "day_after_tomorrow"
+        
+        # Check for "บ่าย" (afternoon)
+        if "บ่าย" in message:
+            if "บ่ายสอง" in message or "บ่าย 2" in message:
+                extracted["time"] = "14"
+            elif "บ่ายสาม" in message or "บ่าย 3" in message:
+                extracted["time"] = "15"
+        
+        # Check for "เช้า"
+        if "เช้า" in message:
+            if "เช้ามาก" in message:
+                extracted["time"] = "7"
+            else:
+                extracted["time"] = "8"
+        
+        # If no specific time, use the whole message as reminder content if empty
+        if not existing_fields.get("message") and extracted:
+            extracted["message"] = current_message
+    
+    elif previous_intent == "task":
+        # Use message as task title
+        if not existing_fields.get("title"):
+            extracted["title"] = current_message.strip()
+    
+    elif previous_intent == "pantry":
+        # Use message as item name
+        if not existing_fields.get("item_name"):
+            extracted["item_name"] = current_message.strip()
+    
+    return extracted if extracted else None
+
+
+def get_session_context(line_user_id: str) -> Dict:
+    """Get current session context for a user."""
+    session = get_session(line_user_id)
+    return session.to_dict()
+
+
+def clear_session(line_user_id: str):
+    """Clear user session."""
+    if line_user_id in _user_sessions:
+        _user_sessions[line_user_id].clear()
+        logger.info(f"Session cleared for {line_user_id}")
+
+
+def get_recent_context(line_user_id: str, limit: int = 3) -> list:
+    """Get recent conversation context."""
+    session = get_session(line_user_id)
+    return session.context_history[-limit:] if session.context_history else []
+
+
+def has_pending_intent(line_user_id: str) -> bool:
+    """Check if user has a pending intent that needs follow-up."""
+    session = get_session(line_user_id)
+    return session.current_intent is not None and len(session.collected_fields) == 0
