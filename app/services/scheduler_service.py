@@ -103,20 +103,26 @@ class ProactiveScheduler:
         self._last_advance_run = today
     
     async def check_and_run_daily_summary(self, now_bkk: datetime, today: date):
-        """Run daily summary at 20:00."""
+        """Run daily summary at configurable time (default 20:00)."""
         if self._last_daily_run == today:
             return
         
-        if now_bkk.hour == 20 and now_bkk.minute == 0:
-            users = self._get_users_with_daily_enabled()
-            for user in users:
+        users = self._get_users_with_daily_enabled()
+        for user in users:
+            user_time = user.get("daily_summary_time")
+            if not user_time:
+                user_time = "20:00"
+            
+            target_time = datetime.strptime(user_time, "%H:%M").time()
+            
+            if now_bkk.time() >= target_time:
                 try:
                     await self._run_daily_summary_for_user(user)
                     logger.info(f"Daily summary sent to user {user.get('id')}")
                 except Exception as e:
                     logger.error(f"Error sending daily summary: {e}")
-            
-            self._last_daily_run = today
+        
+        self._last_daily_run = today
     
     async def check_due_reminders(self):
         """Check and send due reminders."""

@@ -68,8 +68,8 @@ def detect_command(user_message: str) -> Optional[Dict[str, Any]]:
     logger.info(f"[CommandDetector] Processing: {message}")
     
     # 1. Task: Add new task
-    # Pattern: "เพิ่มงาน <text>" or "เพิ่ม <text>"
-    match = re.match(r"^เพิ่มงาน\s+(.+)$", message)
+    # Pattern: "เพิ่มงาน<text>" or "เพิ่มงาน <text>" (space optional)
+    match = re.match(r"^เพิ่มงาน(.+)$", message)
     if match:
         title = match.group(1).strip()
         logger.info(f"[CommandDetector] Detected: add_task, title={title}")
@@ -80,17 +80,24 @@ def detect_command(user_message: str) -> Optional[Dict[str, Any]]:
             "source": "explicit_command"
         }
     
-    # Pattern: "เพิ่ม <text>" (without "งาน")
+    # Pattern: "เพิ่ม <text>" (without "งาน") - but NOT pantry items
+    # Must NOT match patterns like "เพิ่มผัก" (pantry), "เพิ่มหมู" (pantry)
+    # Only match if it looks like a task (contains งาน, task keywords, or is longer)
     match = re.match(r"^เพิ่ม\s+([^\s].+)$", message)
     if match:
         title = match.group(1).strip()
-        logger.info(f"[CommandDetector] Detected: add_task (short), title={title}")
-        return {
-            "action": "add_task",
-            "extracted_fields": {"title": title},
-            "needs_clarification": False,
-            "source": "explicit_command"
-        }
+        # Additional check: if it looks like pantry item, skip
+        pantry_keywords = ['ผัก', 'หมู', 'ไก่', 'ปลา', 'ข้าว', 'น้ำ', 'ไข่', 'นม', 'ผลไม้', 'ส้ม', 'กล้วย', 'มะม่วง', 'อาหาร', 'วัตถุดิบ']
+        is_likely_pantry = any(pk in title for pk in pantry_keywords)
+        
+        if not is_likely_pantry:
+            logger.info(f"[CommandDetector] Detected: add_task (short), title={title}")
+            return {
+                "action": "add_task",
+                "extracted_fields": {"title": title},
+                "needs_clarification": False,
+                "source": "explicit_command"
+            }
     
     # 2. Task: List tasks
     list_patterns = [
@@ -200,9 +207,11 @@ def detect_command(user_message: str) -> Optional[Dict[str, Any]]:
     
     # 6. Pantry: Add item
     # Pattern: "ซื้อ<item>" or "เพิ่ม<item>" or "บันทึก<item>" (no space required)
+    # ONLY match if it looks like a food/pantry item
+    pantry_keywords = ['ผัก', 'หมู', 'ไก่', 'ปลา', 'กุ้ง', 'ข้าว', 'น้ำ', 'ไข่', 'นม', 'ผลไม้', 'ส้ม', 'กล้วย', 'มะม่วง', 'อาหาร', 'วัตถุดิบ', 'ของ', 'กิน', 'ในตู้', 'ในครัว', 'ตู้เย็น', 'ครัว']
+    
     pantry_add_patterns = [
         (r"^ซื้อ(.+)$", "item"),
-        (r"^เพิ่ม(.+)$", "item"),
         (r"^บันทึก(.+)$", "item"),
     ]
     for pattern, key in pantry_add_patterns:
@@ -217,8 +226,45 @@ def detect_command(user_message: str) -> Optional[Dict[str, Any]]:
                 "source": "explicit_command"
             }
     
-    # No explicit command matched - return None to use LLM fallback
-    logger.info(f"[CommandDetector] No explicit command, fallback to LLM")
+    # Special case: "เพิ่ม" for pantry - only if followed by food keyword
+    match = re.match(r"^เพิ่ม(.+)$", message)
+    if match:
+        item = match.group(1).strip()
+        if any(pk in item for pk in pantry_keywords):
+            logger.info(f"[CommandDetector] Detected: add_pantry (เพิ่ม+food), item={item}")
+            return {
+                "action": "add_pantry",
+                "extracted_fields": {"item_name": item},
+                "needs_clarification": False,
+                "source": "explicit_command"
+            }
+    
+    # No explicit command matched - try AI classification
+    logger.info(f"[CommandDetector] No explicit command, trying AI classification")
+    
+    try:
+        from app.services.intent_classifier import classify_intent, extract_fields_for_intent
+        
+        intent = classify_intent(message)
+        logger.info(f"[CommandDetector] AI classified: {intent}")
+        
+        if intent and intent != "chat":
+            fields = extract_fields_for_intent(message, intent)
+            
+            needs_clarification = False
+            if intent == "create_reminder" and not fields.get("has_time"):
+                needs_clarification = True
+            
+            return {
+                "action": intent,
+                "extracted_fields": fields,
+                "needs_clarification": needs_clarification,
+                "source": "ai_classification"
+            }
+    except Exception as e:
+        logger.error(f"[CommandDetector] AI classification failed: {e}")
+    
+    # Fallback to LLM chat
     return None
 
 
