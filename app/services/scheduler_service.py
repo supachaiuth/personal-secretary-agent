@@ -314,7 +314,7 @@ class ProactiveScheduler:
         today_start = datetime.now(BANGKOK_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
         today_iso = today_start.isoformat()
         
-        result = supabase.table("summary_logs").select("id").eq("user_id", user_id).eq("summary_type", summary_type).gte("created_at", today_iso).execute()
+        result = supabase.table("summary_logs").select("id").eq("user_id", user_id).eq("summary_type", summary_type).gte("sent_at", today_iso).execute()
         
         has_log = len(result.data or []) > 0
         logger.info(f"[SCHEDULER] summary_logs CHECK: user_id={user_id} type={summary_type} today={today_iso} found={has_log} count={len(result.data or [])}")
@@ -356,6 +356,7 @@ class ProactiveScheduler:
             supabase.table("summary_logs").insert({
                 "user_id": user_id,
                 "summary_type": "morning",
+                "sent_at": datetime.now(BANGKOK_TZ).isoformat(),
                 "content_summary": f"tasks:{len(pending_tasks)}, reminders:{len(today_reminders)}"
             }).execute()
             logger.info(f"[SCHEDULER] morning_summary logged to DB: user_id={user_id}")
@@ -393,6 +394,7 @@ class ProactiveScheduler:
             supabase.table("summary_logs").insert({
                 "user_id": user_id,
                 "summary_type": "daily",
+                "sent_at": datetime.now(BANGKOK_TZ).isoformat(),
                 "content_summary": f"tasks:{tasks_created}, reminders:{reminders_created}, pantry:{pantry_updates}"
             }).execute()
             logger.info(f"[SCHEDULER] daily_summary logged to DB: user_id={user_id}")
