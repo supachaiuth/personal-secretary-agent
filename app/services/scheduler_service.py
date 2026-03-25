@@ -103,16 +103,12 @@ class ProactiveScheduler:
     def __init__(self):
         self.is_running = False
         self.check_interval = 60
-        self._last_morning_run: Optional[date] = None
         self._last_advance_run: Optional[date] = None
-        self._last_daily_run: Optional[date] = None
     
     def reset_daily_state(self):
         """Reset daily run state - useful for testing"""
-        self._last_morning_run = None
         self._last_advance_run = None
-        self._last_daily_run = None
-        logger.info("[SCHEDULER] Daily state reset for testing")
+        logger.info("[SCHEDULER] Advance state reset for testing")
     
     async def start(self):
         """Start the scheduler."""
@@ -145,65 +141,57 @@ class ProactiveScheduler:
         logger.info("Proactive scheduler stopped")
     
     async def check_and_run_morning_summary(self, now_bkk: datetime, today: date):
-        """Run morning summary at configured time (default 07:45)."""
+        """Run morning summary at configured time (default 07:45) - per-user."""
         current_time = now_bkk.time()
         target_time_default = datetime.strptime("07:45", "%H:%M").time()
         window_minutes = 2
         window_end_time = (datetime.combine(datetime.today(), target_time_default) + timedelta(minutes=window_minutes)).time()
         
-        logger.info(f"[SCHEDULER] morning_summary CHECK: current={current_time} target={target_time_default} window_end={window_end_time} last_run={self._last_morning_run}")
-        
-        # Skip if too early
-        if current_time < target_time_default:
-            logger.info(f"[SCHEDULER] morning_summary SKIP: reason=too_early current={current_time} < target={target_time_default}")
-            return
-        
-        # Skip if missed window
-        if current_time > window_end_time:
-            logger.info(f"[SCHEDULER] morning_summary SKIP: reason=missed_window current={current_time} > window_end={window_end_time}")
-            return
-        
-        # Skip if already ran today
-        if self._last_morning_run == today:
-            logger.info(f"[SCHEDULER] morning_summary SKIP: reason=already_ran_today")
-            return
+        logger.info(f"[SCHEDULER] morning_summary CHECK: current={current_time} target={target_time_default} window_end={window_end_time}")
         
         users = self._get_users_with_morning_enabled()
         
         if not users:
-            logger.info(f"[SCHEDULER] morning_summary SKIP: reason=no_users")
+            logger.info(f"[SCHEDULER] morning_summary SKIP: no_users_enabled")
             return
         
-        logger.info(f"[SCHEDULER] morning_summary EXECUTE: reason=within_window current={current_time} target={target_time_default} window_end={window_end_time}")
-        
-        users_run = False
         for user in users:
             user_id = user.get("id")
             user_time = user.get("morning_summary_time") or "07:45"
+            enabled = user.get("morning_summary_enabled")
             
-            logger.info(f"[SCHEDULER] morning_summary USER: user_id={user_id} user_target={user_time}")
+            logger.info(f"[SCHEDULER] morning_summary USER: user_id={user_id} enabled={enabled} user_time={user_time}")
+            
+            if not enabled:
+                logger.info(f"[SCHEDULER] morning_summary USER_SKIP: user_id={user_id} reason=not_enabled")
+                continue
             
             target_time = parse_time_safe(user_time, "07:45")
             user_window_end = (datetime.combine(datetime.today(), target_time) + timedelta(minutes=window_minutes)).time()
             
-            if target_time <= current_time <= user_window_end:
-                logger.info(f"[SCHEDULER] morning_summary USER_EXECUTE: user_id={user_id} in_window")
-                try:
-                    success = await self._run_morning_summary_for_user(user)
-                    if success:
-                        logger.info(f"[SCHEDULER] morning_summary SUCCESS: user_id={user_id}")
-                        users_run = True
-                    else:
-                        logger.warning(f"[SCHEDULER] morning_summary FAILED: user_id={user_id} push_failed")
-                except Exception as e:
-                    logger.error(f"[SCHEDULER] morning_summary ERROR: user_id={user_id} error={e}")
-            else:
-                logger.info(f"[SCHEDULER] morning_summary USER_SKIP: user_id={user_id} outside_window")
-        
-        # Only mark as run after successful send
-        if users_run:
-            self._last_morning_run = today
-            logger.info(f"[SCHEDULER] morning_summary MARKED_RUN: today={today}")
+            logger.info(f"[SCHEDULER] morning_summary USER: user_id={user_id} current={current_time} target={target_time} window_end={user_window_end}")
+            
+            if current_time < target_time:
+                logger.info(f"[SCHEDULER] morning_summary USER_SKIP: user_id={user_id} reason=too_early")
+                continue
+            
+            if current_time > user_window_end:
+                logger.info(f"[SCHEDULER] morning_summary USER_SKIP: user_id={user_id} reason=missed_window")
+                continue
+            
+            if self._user_has_summary_today(user_id, "morning", today):
+                logger.info(f"[SCHEDULER] morning_summary USER_SKIP: user_id={user_id} reason=already_sent_today")
+                continue
+            
+            logger.info(f"[SCHEDULER] morning_summary USER_EXECUTE: user_id={user_id} reason=within_window")
+            try:
+                success = await self._run_morning_summary_for_user(user)
+                if success:
+                    logger.info(f"[SCHEDULER] morning_summary SUCCESS: user_id={user_id}")
+                else:
+                    logger.warning(f"[SCHEDULER] morning_summary FAILED: user_id={user_id} push_failed")
+            except Exception as e:
+                logger.error(f"[SCHEDULER] morning_summary ERROR: user_id={user_id} error={e}")
     
     async def check_and_run_advance_reminders(self, now_bkk: datetime, today: date):
         """Run advance reminders check (5 days, 2 days, same day)."""
@@ -220,65 +208,57 @@ class ProactiveScheduler:
         self._last_advance_run = today
     
     async def check_and_run_daily_summary(self, now_bkk: datetime, today: date):
-        """Run daily summary at configurable time (default 20:00)."""
+        """Run daily summary at configured time (default 20:00) - per-user."""
         current_time = now_bkk.time()
         target_time_default = datetime.strptime("20:00", "%H:%M").time()
         window_minutes = 2
         window_end_time = (datetime.combine(datetime.today(), target_time_default) + timedelta(minutes=window_minutes)).time()
         
-        logger.info(f"[SCHEDULER] daily_summary CHECK: current={current_time} target={target_time_default} window_end={window_end_time} last_run={self._last_daily_run}")
-        
-        # Skip if too early
-        if current_time < target_time_default:
-            logger.info(f"[SCHEDULER] daily_summary SKIP: reason=too_early current={current_time} < target={target_time_default}")
-            return
-        
-        # Skip if missed window
-        if current_time > window_end_time:
-            logger.info(f"[SCHEDULER] daily_summary SKIP: reason=missed_window current={current_time} > window_end={window_end_time}")
-            return
-        
-        # Skip if already ran today
-        if self._last_daily_run == today:
-            logger.info(f"[SCHEDULER] daily_summary SKIP: reason=already_ran_today")
-            return
+        logger.info(f"[SCHEDULER] daily_summary CHECK: current={current_time} target={target_time_default} window_end={window_end_time}")
         
         users = self._get_users_with_daily_enabled()
         
         if not users:
-            logger.info(f"[SCHEDULER] daily_summary SKIP: reason=no_users")
+            logger.info(f"[SCHEDULER] daily_summary SKIP: no_users_enabled")
             return
         
-        logger.info(f"[SCHEDULER] daily_summary EXECUTE: reason=within_window current={current_time} target={target_time_default} window_end={window_end_time}")
-        
-        users_run = False
         for user in users:
             user_id = user.get("id")
             user_time = user.get("daily_summary_time") or "20:00"
+            enabled = user.get("daily_summary_enabled")
             
-            logger.info(f"[SCHEDULER] daily_summary USER: user_id={user_id} user_target={user_time}")
+            logger.info(f"[SCHEDULER] daily_summary USER: user_id={user_id} enabled={enabled} user_time={user_time}")
+            
+            if not enabled:
+                logger.info(f"[SCHEDULER] daily_summary USER_SKIP: user_id={user_id} reason=not_enabled")
+                continue
             
             target_time = parse_time_safe(user_time, "20:00")
             user_window_end = (datetime.combine(datetime.today(), target_time) + timedelta(minutes=window_minutes)).time()
             
-            if target_time <= current_time <= user_window_end:
-                logger.info(f"[SCHEDULER] daily_summary USER_EXECUTE: user_id={user_id} in_window")
-                try:
-                    success = await self._run_daily_summary_for_user(user)
-                    if success:
-                        logger.info(f"[SCHEDULER] daily_summary SUCCESS: user_id={user_id}")
-                        users_run = True
-                    else:
-                        logger.warning(f"[SCHEDULER] daily_summary FAILED: user_id={user_id} push_failed")
-                except Exception as e:
-                    logger.error(f"[SCHEDULER] daily_summary ERROR: user_id={user_id} error={e}")
-            else:
-                logger.info(f"[SCHEDULER] daily_summary USER_SKIP: user_id={user_id} outside_window")
-        
-        # Only mark as run after successful send
-        if users_run:
-            self._last_daily_run = today
-            logger.info(f"[SCHEDULER] daily_summary MARKED_RUN: today={today}")
+            logger.info(f"[SCHEDULER] daily_summary USER: user_id={user_id} current={current_time} target={target_time} window_end={user_window_end}")
+            
+            if current_time < target_time:
+                logger.info(f"[SCHEDULER] daily_summary USER_SKIP: user_id={user_id} reason=too_early")
+                continue
+            
+            if current_time > user_window_end:
+                logger.info(f"[SCHEDULER] daily_summary USER_SKIP: user_id={user_id} reason=missed_window")
+                continue
+            
+            if self._user_has_summary_today(user_id, "daily", today):
+                logger.info(f"[SCHEDULER] daily_summary USER_SKIP: user_id={user_id} reason=already_sent_today")
+                continue
+            
+            logger.info(f"[SCHEDULER] daily_summary USER_EXECUTE: user_id={user_id} reason=within_window")
+            try:
+                success = await self._run_daily_summary_for_user(user)
+                if success:
+                    logger.info(f"[SCHEDULER] daily_summary SUCCESS: user_id={user_id}")
+                else:
+                    logger.warning(f"[SCHEDULER] daily_summary FAILED: user_id={user_id} push_failed")
+            except Exception as e:
+                logger.error(f"[SCHEDULER] daily_summary ERROR: user_id={user_id} error={e}")
     
     async def check_due_reminders(self):
         """Check and send due reminders."""
@@ -328,6 +308,18 @@ class ProactiveScheduler:
         """Get users with daily summary enabled."""
         result = supabase.table("users").select("*").eq("daily_summary_enabled", True).execute()
         return result.data or []
+    
+    def _user_has_summary_today(self, user_id: str, summary_type: str, today: date) -> bool:
+        """Check if user already received this summary type today (Bangkok timezone)."""
+        today_start = datetime.now(BANGKOK_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+        today_iso = today_start.isoformat()
+        
+        result = supabase.table("summary_logs").select("id").eq("user_id", user_id).eq("summary_type", summary_type).gte("created_at", today_iso).execute()
+        
+        has_log = len(result.data or []) > 0
+        logger.info(f"[SCHEDULER] summary_logs CHECK: user_id={user_id} type={summary_type} today={today_iso} found={has_log} count={len(result.data or [])}")
+        
+        return has_log
     
     async def _run_morning_summary_for_user(self, user: Dict):
         """Generate and send morning summary for a user."""
