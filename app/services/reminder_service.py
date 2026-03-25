@@ -8,6 +8,89 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+INVALID_PREFIX = "[INVALID]"
+
+GARBAGE_PATTERNS = [
+    "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า", "สิบ",
+    "ครับ", "ค่ะ", "นะ", "ด้วย", "ช่วย", "หน่อย",
+    "พรุ่งนี้", "วันพรุ่ง", "มะรืนนี้", "วันนี้", "พรุ่ง",
+    "โมง", "บ่าย", "เช้า", "เย็น", "ทุ่ม", "ตี",
+    "1", "2", "3", "4", "5", "6", "7", "8", "9", "0",
+    "๑", "๒", "๓", "๔", "๕", "๖", "๗", "๘", "๙", "๐"
+]
+
+MIN_MESSAGE_LENGTH = 3
+
+
+def is_valid_reminder(reminder_data: Dict[str, Any]) -> bool:
+    """
+    Validate reminder data before saving or including in summaries.
+    
+    Rules:
+    - message must exist, non-empty, length >= MIN_MESSAGE_LENGTH
+    - message must not be a raw dict/object
+    - message must not be single word garbage (numbers, pronouns, etc)
+    - remind_at must be valid ISO datetime string
+    - message must not already be marked invalid
+    
+    Returns:
+        bool: True if valid, False otherwise
+    """
+    message = reminder_data.get("message")
+    remind_at = reminder_data.get("remind_at")
+    
+    # Check message exists and is string
+    if not message or not isinstance(message, str):
+        logger.warning(f"[ReminderValidator] Invalid: message is None or not string")
+        return False
+    
+    # Check message not marked as invalid
+    if message.startswith(INVALID_PREFIX):
+        logger.warning(f"[ReminderValidator] Invalid: message already marked invalid")
+        return False
+    
+    # Check message not raw dict/object
+    if message.startswith("{") or message.startswith("["):
+        logger.warning(f"[ReminderValidator] Invalid: message appears to be raw object: {message[:50]}")
+        return False
+    
+    # Check message length
+    message_clean = message.strip()
+    if len(message_clean) < MIN_MESSAGE_LENGTH:
+        logger.warning(f"[ReminderValidator] Invalid: message too short ({len(message_clean)} chars): '{message_clean}'")
+        return False
+    
+    # Check message is not single garbage word
+    if message_clean in GARBAGE_PATTERNS:
+        logger.warning(f"[ReminderValidator] Invalid: message is garbage pattern: '{message_clean}'")
+        return False
+    
+    # Check remind_at exists and valid
+    if not remind_at:
+        logger.warning(f"[ReminderValidator] Invalid: remind_at is None")
+        return False
+    
+    if not isinstance(remind_at, str) or len(remind_at) < 10:
+        logger.warning(f"[ReminderValidator] Invalid: remind_at not valid string: {remind_at}")
+        return False
+    
+    # Try to parse remind_at as ISO datetime
+    try:
+        datetime.fromisoformat(remind_at.replace("Z", "+00:00"))
+    except (ValueError, AttributeError) as e:
+        logger.warning(f"[ReminderValidator] Invalid: remind_at not valid ISO format: {remind_at}, error: {e}")
+        return False
+    
+    logger.debug(f"[ReminderValidator] Valid reminder: message='{message_clean[:30]}...', remind_at={remind_at}")
+    return True
+
+
+def mark_reminder_invalid(reminder_data: Dict[str, Any], reason: str = "") -> Dict[str, Any]:
+    """Mark a reminder as invalid by prefixing the message."""
+    result = reminder_data.copy()
+    result["message"] = f"{INVALID_PREFIX} {reason} | {result.get('message', '')}"
+    return result
+
 
 class ReminderService:
     """Service for creating and managing reminders."""
@@ -373,23 +456,29 @@ class ReminderService:
         message: str,
         remind_at: Optional[datetime] = None
     ) -> Dict[str, Any]:
-        """Create a reminder for the user."""
+        """Create a reminder for the user. Returns None if validation fails."""
         if remind_at is None:
             remind_at = self.parse_reminder_time(message)
         
         if remind_at is None:
-            # Default to tomorrow 9:00
-            remind_at = datetime.now() + timedelta(days=1)
-            remind_at = remind_at.replace(hour=9, minute=0, second=0, microsecond=0)
+            logger.warning(f"[ReminderService] Cannot parse reminder time from: {message}")
+            return None
         
-        reminder_message = self.extract_reminder_message(message)
+        parsed = self.parse_reminder_message(message)
+        reminder_message = parsed.get("message", "")
         
-        return {
+        reminder_data = {
             "user_id": user_id,
             "message": reminder_message,
-            "remind_at": remind_at.isoformat(),
+            "remind_at": remind_at.isoformat() if isinstance(remind_at, datetime) else remind_at,
             "status": "pending"
         }
+        
+        if not is_valid_reminder(reminder_data):
+            logger.warning(f"[ReminderService] Reminder validation failed for: {message}")
+            return None
+        
+        return reminder_data
     
     def format_reminder_response(self, reminder: Dict[str, Any]) -> str:
         """Format reminder as response string."""

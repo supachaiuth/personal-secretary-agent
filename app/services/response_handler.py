@@ -181,6 +181,8 @@ def get_response_for_action(
     
     # ===== create_reminder =====
     if action == "create_reminder":
+        from app.services.reminder_service import is_valid_reminder
+        
         # CRITICAL: Normalize message to string
         raw_message = extracted_fields.get("message")
         
@@ -204,6 +206,15 @@ def get_response_for_action(
         
         if not has_time or not remind_at:
             return f"ต้องการให้เตือนกี่โมงครับ?", False
+        
+        # CRITICAL: Validate before saving to DB
+        reminder_data = {
+            "message": message,
+            "remind_at": remind_at
+        }
+        if not is_valid_reminder(reminder_data):
+            logger.warning(f"[ResponseHandler] Reminder validation failed, message='{message}', remind_at={remind_at}")
+            return f"❌ ไม่สามารถสร้างการแจ้งเตือนได้ (ข้อมูลไม่ถูกต้อง)", False
         
         # CRITICAL: Only return success AFTER DB insert succeeds
         if not user_id:

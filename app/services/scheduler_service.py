@@ -17,12 +17,45 @@ from zoneinfo import ZoneInfo
 from supabase import Client
 from app.services.supabase_service import get_supabase
 from app.services.line_service import push_message
+from app.services.reminder_service import is_valid_reminder, INVALID_PREFIX
 
 logger = logging.getLogger(__name__)
 
 BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
 
 supabase: Client = get_supabase()
+
+
+def filter_valid_reminders(reminders: List[Dict]) -> List[Dict]:
+    """
+    Filter out invalid reminders before including in summaries.
+    
+    Rules:
+    - Must pass is_valid_reminder() check
+    - Must not be marked with INVALID_PREFIX
+    
+    Returns:
+        List of valid reminders only
+    """
+    valid = []
+    for r in reminders:
+        if is_valid_reminder(r):
+            valid.append(r)
+        else:
+            logger.warning(f"[Scheduler] Filtering invalid reminder: id={r.get('id')}, message='{r.get('message', '')[:30]}...'")
+    return valid
+
+
+def deduplicate_reminders(reminders: List[Dict]) -> List[Dict]:
+    """Remove duplicate reminders based on message content."""
+    seen = set()
+    unique = []
+    for r in reminders:
+        msg = r.get("message", "").strip()
+        if msg and msg not in seen:
+            seen.add(msg)
+            unique.append(r)
+    return unique
 
 
 def parse_time_safe(time_value: Any, default: str = "00:00") -> time:
@@ -173,6 +206,10 @@ class ProactiveScheduler:
                 return
             
             for reminder in result.data:
+                if not is_valid_reminder(reminder):
+                    logger.warning(f"[Due Reminder] Skipping invalid reminder id={reminder.get('id')}")
+                    continue
+                
                 user_id = reminder.get("user_id")
                 message = reminder.get("message")
                 reminder_id = reminder.get("id")
@@ -233,6 +270,9 @@ class ProactiveScheduler:
                 if remind_dt.date() == today_start.date():
                     today_reminders.append(r)
         
+        today_reminders = deduplicate_reminders(filter_valid_reminders(today_reminders))
+        logger.info(f"[Morning Summary] Valid reminders for user {user_id}: {len(today_reminders)}")
+        
         memories = self._get_smart_memories(user_id)
         
         message = self._format_morning_summary(display_name, pending_tasks, today_reminders, memories)
@@ -263,6 +303,9 @@ class ProactiveScheduler:
         
         upcoming_result = supabase.table("reminders").select("*").eq("user_id", user_id).eq("sent", False).gte("remind_at", datetime.now(BANGKOK_TZ).isoformat()).execute()
         upcoming = upcoming_result.data or []
+        
+        upcoming = deduplicate_reminders(filter_valid_reminders(upcoming))
+        logger.info(f"[Daily Summary] Valid upcoming reminders for user {user_id}: {len(upcoming)}")
         
         message = self._format_daily_summary(display_name, tasks_created, reminders_created, pantry_updates, upcoming)
         
@@ -305,6 +348,9 @@ class ProactiveScheduler:
                     remind_dt = datetime.fromisoformat(remind_at.replace("Z", "+00:00")).astimezone(BANGKOK_TZ)
                     if start_of_target <= remind_dt <= end_of_target:
                         target_reminders.append(r)
+            
+            target_reminders = deduplicate_reminders(filter_valid_reminders(target_reminders))
+            logger.info(f"[Advance {sent_type}] Valid reminders for user {user_id}: {len(target_reminders)}")
             
             if days_before == 0:
                 pantry_result = supabase.table("pantry_items").select("*").eq("user_id", user_id).execute()
