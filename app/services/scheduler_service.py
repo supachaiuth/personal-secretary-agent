@@ -25,6 +25,40 @@ BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
 supabase: Client = get_supabase()
 
 
+def parse_time_safe(time_value: Any, default: str = "00:00") -> time:
+    """
+    Safely parse time from various formats.
+    
+    Supports:
+    - "HH:MM" (e.g., "07:45")
+    - "HH:MM:SS" (e.g., "07:45:00")
+    - Python time object
+    - None or empty
+    
+    Returns:
+        time object or default time if parsing fails
+    """
+    if time_value is None:
+        logger.warning(f"[Scheduler] Time is None, using default {default}")
+        return datetime.strptime(default, "%H:%M").time()
+    
+    if isinstance(time_value, time):
+        return time_value
+    
+    time_str = str(time_value).strip()
+    
+    for fmt in ["%H:%M:%S", "%H:%M"]:
+        try:
+            parsed = datetime.strptime(time_str, fmt).time()
+            logger.debug(f"[Scheduler] Parsed time '{time_str}' -> {parsed}")
+            return parsed
+        except ValueError:
+            continue
+    
+    logger.error(f"[Scheduler] Failed to parse time: '{time_value}', using default {default}")
+    return datetime.strptime(default, "%H:%M").time()
+
+
 class ProactiveScheduler:
     """
     Proactive scheduler for:
