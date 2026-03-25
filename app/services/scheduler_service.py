@@ -314,6 +314,7 @@ class ProactiveScheduler:
         today_start = datetime.now(BANGKOK_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
         today_iso = today_start.isoformat()
         
+        logger.info(f"[SCHEDULER] DEBUG: summary_logs query using sent_at (NOT created_at) for user_id={user_id} type={summary_type}")
         result = supabase.table("summary_logs").select("id").eq("user_id", user_id).eq("summary_type", summary_type).gte("sent_at", today_iso).execute()
         
         has_log = len(result.data or []) > 0
