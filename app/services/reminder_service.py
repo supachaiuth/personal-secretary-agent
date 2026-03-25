@@ -264,15 +264,31 @@ class ReminderService:
                 time = f"{hour:02d}:{minute:02d}"
                 logger.info(f"[ReminderService] Detected HH:MM -> {time}")
         
+        # RULE 6: Check Thai minute patterns like "9 โมง 5 นาที" or "9 โมง 30 นาที"
+        if time is not None and minute == 0:
+            minute_match = re.search(r'(\d{1,2})\s*นาที', message_for_time)
+            if minute_match:
+                minute = int(minute_match.group(1))
+                time = f"{hour:02d}:{minute:02d}"
+                logger.info(f"[ReminderService] Detected X นาที -> {time}")
+        
         has_time = time is not None
-        logger.info(f"[ReminderService] Final time: {time}, has_time: {has_time}, hour={hour}")
+        logger.info(f"[ReminderService] Final time: {time}, has_time={has_time}, hour={hour}")
         
         # ===== CLEAN MESSAGE =====
-        # Use message_for_cleaning (Thai numerals converted to Arabic)
-        cleaned = message_for_cleaning
+        cleaned = message_lower
         
-        # FIRST: Remove time words EXHAUSTIVELY (before other cleaning)
-        # Include both Thai and Arabic numeral versions (with and without space)
+        # FIRST: Remove reminder command words (before anything else)
+        # More aggressive - remove "ช่วย" prefix separately
+        cleaned = re.sub(r'^ช่วย\s+', '', cleaned)
+        cleaned = re.sub(r'^(เตือน|แจ้งเตือน)\s*', '', cleaned)
+        cleaned = re.sub(r'\s+(เตือน|แจ้งเตือน)\s+', ' ', cleaned)
+        cleaned = re.sub(r'^(อย่าลืม)\s*', '', cleaned)
+        
+        # Also remove common fillers at start
+        cleaned = re.sub(r'^(หน่อย|นะ|ครับ|ค่ะ|ด้วย)\s*', '', cleaned)
+        
+        # Remove time words EXHAUSTIVELY
         time_words = [
             'บ่ายสอง', 'บ่าย2', 'บ่าย 2', 'บ่ายสองโมง',
             'บ่ายสาม', 'บ่าย3', 'บ่าย 3', 'บ่ายสามโมง',
@@ -290,40 +306,31 @@ class ReminderService:
         for tw in time_words:
             cleaned = cleaned.replace(tw, ' ')
         
-        # Remove remaining X โมง patterns (including โมงเช้า, โมงเย็น already handled)
+        # Remove X โมง patterns
         cleaned = re.sub(r'\d{1,2}\s*โมง', ' ', cleaned)
-        # Remove X ทุ่ม patterns (with or without space) - handle compound first
-        cleaned = re.sub(r'\d{1,2}ทุ่ม', ' ', cleaned)  # 3ทุ่ม → space
-        cleaned = re.sub(r'\d{1,2}\s*ทุ่ม', ' ', cleaned)  # 3 ทุ่ม → space
+        # Remove X ทุ่ม patterns
+        cleaned = re.sub(r'\d{1,2}\s*ทุ่ม', ' ', cleaned)
         # Remove ตีX patterns
         cleaned = re.sub(r'ตี\d{1,2}', ' ', cleaned)
+        # Remove X นาที patterns
+        cleaned = re.sub(r'\d{1,2}\s*นาที', ' ', cleaned)
         
-        # Clean up orphaned numbers that remain after time word removal
-        # (e.g., "3" left over from "3ทุ่ม" or "บ่าย3")
-        # Handle numbers that are attached to text (like "ฉัน3") or standalone
-        cleaned = re.sub(r'\d+(?=\s|$)', '', cleaned)
-        cleaned = re.sub(r'(^|\s+)\d+(\s+|$)', ' ', cleaned)
+        # Remove standalone numbers (orphaned after time word removal)
+        cleaned = re.sub(r'(^|\s)\d+(\s|$)', ' ', cleaned)
         
-        # Remove command words
-        cleaned = re.sub(r'^(เตือน|แจ้งเตือน|reminder)\s*', '', cleaned)
-        cleaned = re.sub(r'\s+(เตือน|แจ้งเตือน)\s+', ' ', cleaned)
-        
-        # Remove pronouns at start - explicit check for Thai
-        # Don't remove 'อี' as it could be actual message content
-        for pronoun in ['ฉัน', 'ผม', 'เขา', 'คุณ']:
+        # Remove pronouns
+        for pronoun in ['ฉัน', 'ผม', 'เขา', 'คุณ', 'ด้วย', 'นะ', 'ครับ', 'ค่ะ']:
             if cleaned.startswith(pronoun):
                 cleaned = cleaned[len(pronoun):]
-                break
-        # Remove pronouns after space
-        cleaned = re.sub(r'\s+(ฉัน|ผม|เขา|คุณ)\b', ' ', cleaned)
+        cleaned = re.sub(r'\s+(ฉัน|ผม|เขา|คุณ|ด้วย|นะ|ครับ|ค่ะ)\b', ' ', cleaned)
         
-        # Remove date words - also handle when directly followed by other text
-        cleaned = re.sub(r'(พรุ่งนี้|วันพรุ่ง|มะรืนนี้|วันนี้)(?=[^ก-๙]|\s|$)', '', cleaned)
+        # Remove date words
+        cleaned = re.sub(r'(พรุ่งนี้|วันพรุ่ง|มะรืนนี้|วันนี้)', '', cleaned)
         
         # Remove HH:MM
         cleaned = re.sub(r'\d{1,2}:\d{2}', ' ', cleaned)
         
-        # Clean up whitespace
+        # Final cleanup
         cleaned = re.sub(r'\s+', ' ', cleaned).strip()
         
         logger.info(f"[ReminderService] Cleaned message: '{cleaned}'")

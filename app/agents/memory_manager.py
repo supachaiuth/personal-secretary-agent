@@ -217,3 +217,35 @@ def has_pending_intent(line_user_id: str) -> bool:
     """Check if user has a pending intent that needs follow-up."""
     session = get_session(line_user_id)
     return session.current_intent is not None and len(session.collected_fields) == 0
+
+
+def add_persistent_memory(user_id: str, topic: str, content: str):
+    """Add or update a persistent memory for a user (deduplicated by topic)."""
+    try:
+        from app.repositories.memory_repository import MemoryRepository
+        memory_repo = MemoryRepository()
+        memory_repo.upsert_by_topic(user_id, topic, content)
+        logger.info(f"Memory saved: user={user_id}, topic={topic}")
+    except Exception as e:
+        logger.error(f"Error saving memory: {e}")
+
+
+def get_persistent_memories(user_id: str, limit: int = 5):
+    """Get latest persistent memories for a user (deduplicated by topic)."""
+    try:
+        from app.repositories.memory_repository import MemoryRepository
+        memory_repo = MemoryRepository()
+        result = memory_repo.get_by_user_id(user_id)
+        if not result.data:
+            return []
+        
+        topics_seen = {}
+        for mem in result.data:
+            topic = mem.get("topic")
+            if topic not in topics_seen:
+                topics_seen[topic] = mem
+        
+        return list(topics_seen.values())[:limit]
+    except Exception as e:
+        logger.error(f"Error getting memories: {e}")
+        return []

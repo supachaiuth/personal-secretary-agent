@@ -32,6 +32,28 @@ EXPLICIT_COMMANDS = [
 ]
 
 
+def _parse_reminder_from_text(text: str) -> Dict[str, Any]:
+    """Parse reminder from free-form Thai text."""
+    from app.services.reminder_service import reminder_service
+    
+    parsed = reminder_service.parse_reminder_message(text)
+    
+    remind_at = None
+    if parsed.get("date") and parsed.get("time"):
+        remind_at = reminder_service.calculate_remind_at(parsed.get("date"), parsed.get("time"))
+    
+    needs_clarification = not parsed.get("has_time") or not remind_at
+    
+    return {
+        "message": parsed.get("message", text),
+        "date": parsed.get("date"),
+        "time": parsed.get("time"),
+        "has_time": parsed.get("has_time", False),
+        "remind_at": remind_at,
+        "needs_clarification": needs_clarification
+    }
+
+
 def detect_command(user_message: str) -> Optional[Dict[str, Any]]:
     """
     Detect explicit commands using keyword/regex matching.
@@ -87,38 +109,55 @@ def detect_command(user_message: str) -> Optional[Dict[str, Any]]:
                 "source": "explicit_command"
             }
     
-    # 3. Reminder: Create reminder
+    # 3. Reminder: Create reminder (at beginning)
     # Pattern: "เตือน <message>" or "เตือนฉัน <message>" or "แจ้งเตือน <message>"
     reminder_match = re.match(r"^(เตือน|แจ้งเตือน)\s*(.*)$", message)
     if reminder_match:
         raw_text = reminder_match.group(2).strip()
         logger.info(f"[CommandDetector] Detected: create_reminder, raw={raw_text}")
         
-        # Parse time from reminder message
-        from app.services.reminder_service import reminder_service
-        parsed = reminder_service.parse_reminder_message(raw_text)
+        result = _parse_reminder_from_text(raw_text)
         
-        # Calculate remind_at if we have date and time
-        remind_at = None
-        if parsed.get("date") and parsed.get("time"):
-            remind_at = reminder_service.calculate_remind_at(parsed.get("date"), parsed.get("time"))
-        
-        needs_clarification = not parsed.get("has_time") or not remind_at
-        
-        logger.info(f"[CommandDetector] Reminder parsed: {parsed}, needs_clarification={needs_clarification}, remind_at={remind_at}")
+        logger.info(f"[CommandDetector] Reminder parsed: {result}")
         
         return {
             "action": "create_reminder",
             "extracted_fields": {
-                "message": parsed.get("message", raw_text),
-                "date": parsed.get("date"),
-                "time": parsed.get("time"),
-                "has_time": parsed.get("has_time", False),
-                "remind_at": remind_at
+                "message": result.get("message", raw_text),
+                "date": result.get("date"),
+                "time": result.get("time"),
+                "has_time": result.get("has_time", False),
+                "remind_at": result.get("remind_at")
             },
-            "needs_clarification": needs_clarification,
+            "needs_clarification": result.get("needs_clarification", False),
             "source": "explicit_command"
         }
+    
+    # 3b. Reminder: Free-form with reminder keywords anywhere
+    # Patterns like: "พรุ่งนี้ 8 โมง เตือนผมหน่อย มีประชุม"
+    # Or: "ช่วยเตือนด้วยนะ พรุ่งนี้ 9 โมง"
+    reminder_keywords = ["เตือน", "แจ้งเตือน", "ช่วยเตือน", "เตือนด้วย", "อย่าลืม"]
+    if any(kw in lower_message for kw in reminder_keywords):
+        logger.info(f"[CommandDetector] Detected reminder keyword in: {message}")
+        
+        result = _parse_reminder_from_text(message)
+        
+        if result.get("has_time") and result.get("remind_at"):
+            logger.info(f"[CommandDetector] Free-form reminder parsed: {result}")
+            return {
+                "action": "create_reminder",
+                "extracted_fields": {
+                    "message": result.get("message", message),
+                    "date": result.get("date"),
+                    "time": result.get("time"),
+                    "has_time": result.get("has_time", False),
+                    "remind_at": result.get("remind_at")
+                },
+                "needs_clarification": False,
+                "source": "explicit_command"
+            }
+        else:
+            logger.info(f"[CommandDetector] Free-form reminder needs clarification")
     
     # 4. Calendar: Query calendar
     calendar_patterns = [

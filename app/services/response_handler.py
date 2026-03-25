@@ -8,6 +8,7 @@ from app.repositories.task_repository import TaskRepository
 from app.repositories.pantry_repository import PantryRepository
 from app.repositories.reminder_repository import ReminderRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.activity_repository import ActivityRepository
 from app.services.reminder_service import reminder_service
 
 
@@ -15,6 +16,10 @@ task_repo = TaskRepository()
 pantry_repo = PantryRepository()
 reminder_repo = ReminderRepository()
 user_repo = UserRepository()
+activity_repo = ActivityRepository()
+
+import logging
+logger = logging.getLogger(__name__)
 
 
 # Legacy intent-based responses (fallback)
@@ -139,10 +144,11 @@ def get_response_for_action(
         try:
             if user_id:
                 task_repo.create(user_id, title)
+                activity_repo.log_activity(user_id, "task_created", {"title": title})
                 logger.info(f"[ResponseHandler] Task created: {title} for user {user_id}")
-                return f"✅ เพิ่มงาน '{title}' เรียบร้อยครับ!", True
+                return f"✅ เพิ่มงาน '{title}' เรียบร้อยครับ", True
             else:
-                return f"✅ เพิ่มงาน '{title}' เรียบร้อยครับ! (note: not saved to DB - no user)", True
+                return f"✅ เพิ่มงาน '{title}' เรียบร้อยครับ", True
         except Exception as e:
             logger.error(f"[ResponseHandler] Error creating task: {e}")
             return f"❌ ไม่สามารถเพิ่มงานได้ ลองใหม่อีกครั้งครับ", False
@@ -160,10 +166,11 @@ def get_response_for_action(
         try:
             if user_id:
                 pantry_repo.create(user_id, item_name)
+                activity_repo.log_activity(user_id, "pantry_updated", {"item_name": item_name, "action": "add"})
                 logger.info(f"[ResponseHandler] Pantry item created: {item_name}")
-                return f"✅ เพิ่ม '{item_name}' ในตู้เย็นเรียบร้อยครับ!", True
+                return f"✅ เพิ่ม '{item_name}' ในตู้เย็นเรียบร้อยครับ", True
             else:
-                return f"✅ เพิ่ม '{item_name}' ในตู้เย็นเรียบร้อยครับ! (not saved)", True
+                return f"✅ เพิ่ม '{item_name}' ในตู้เย็นเรียบร้อยครับ", True
         except Exception as e:
             logger.error(f"[ResponseHandler] Error creating pantry item: {e}")
             return f"❌ ไม่สามารถเพิ่มได้ ลองใหม่อีกครั้งครับ", False
@@ -193,10 +200,10 @@ def get_response_for_action(
         
         # Check if complete
         if not message:
-            return f"{user_name}ต้องการเตือนอะไรครับ?", False
+            return f"ต้องการให้เตือนอะไรครับ?", False
         
         if not has_time or not remind_at:
-            return f"{user_name}ต้องการเตือน '{message}' กี่โมงครับ?", False
+            return f"ต้องการให้เตือนกี่โมงครับ?", False
         
         # CRITICAL: Only return success AFTER DB insert succeeds
         if not user_id:
@@ -210,18 +217,18 @@ def get_response_for_action(
         # Save to DB
         try:
             reminder_repo.create(user_id, message, remind_at)
+            activity_repo.log_activity(user_id, "reminder_created", {"message": message, "remind_at": remind_at})
             logger.info(f"[ResponseHandler] ✅ Reminder SAVED to DB: message='{message}', remind_at={remind_at}")
             
             formatted_time = _format_thai_datetime(remind_at)
-            return f"✅ เตือน '{message}' ไว้เมื่อ {formatted_time} ครับ!", True
+            return f"✅ ตั้งเตือน '{message}' {formatted_time} เรียบร้อยครับ", True
         except Exception as e:
             logger.error(f"[ResponseHandler] ❌ Error creating reminder: {e}")
             return f"❌ ไม่สามารถสร้างการแจ้งเตือนได้ ลองใหม่อีกครั้งครับ", False
     
     # ===== calendar_query =====
     if action == "calendar_query":
-        # Stub - return placeholder
-        return f"{user_name}มีนัดหมายดังนี้:\n• ประชุม 10.00 น. (stub)\n\n(Calendar integration ยังไม่พร้อมใช้งาน)", True
+        return f"{user_name}ขอโทษครับ ยังไม่สามารถดูตารางนัดหมายได้ในตอนนี้", True
     
     # ===== unknown action =====
     return f"{user_name}ขอโทษครับ ไม่เข้าใจ ลองใหม่ได้ไหมครับ?", False
@@ -267,7 +274,3 @@ def get_clarification_question(intent: str, default_message: str = "") -> str:
         return default_message
     
     return "ขอรายละเอียดเพิ่มเติมได้ไหมครับ?"
-
-
-import logging
-logger = logging.getLogger(__name__)

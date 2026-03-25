@@ -1,7 +1,18 @@
 from fastapi import FastAPI
+from contextlib import asynccontextmanager
 from app.api import health, webhook
+from app.services.scheduler_service import start_scheduler_background
 
 app = FastAPI(title="Personal Secretary Agent")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    start_scheduler_background()
+    yield
+
+
+app = FastAPI(title="Personal Secretary Agent", lifespan=lifespan)
 
 app.include_router(health.router, tags=["health"])
 app.include_router(webhook.router, tags=["webhook"])
