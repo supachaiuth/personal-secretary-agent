@@ -298,9 +298,11 @@ class ReminderService:
                 time = f"{hour:02d}:00"
                 logger.info(f"[ReminderService] Detected X โมงเช้า: {time}")
             
-            # Check "X โมงเย็น" (e.g., "8 โมงเย็น" = 20:00)
+            # Check "X โมงเย็น" (e.g., "6 โมงเย็น" = 18:00, "7 โมงเย็น" = 19:00)
             elif re.search(r'(\d{1,2})\s*โมงเย็น', message_for_time):
-                hour = 20  # 8 โมงเย็น = 20:00 always
+                yen_match = re.search(r'(\d{1,2})\s*โมงเย็น', message_for_time)
+                yen_hour = int(yen_match.group(1))
+                hour = yen_hour + 12  # 6 โมงเย็น = 18:00, 7 โมงเย็น = 19:00, etc.
                 time = f"{hour:02d}:00"
                 logger.info(f"[ReminderService] Detected X โมงเย็น: {time}")
             
@@ -542,6 +544,7 @@ class ReminderService:
         raw_message = parsed.get("message", "")
         original = parsed.get("_original", "")
         
+        logger.info(f"[ReminderService] Normalize: original='{original}'")
         logger.info(f"[ReminderService] Normalize: time={time_val}, raw_message='{raw_message}'")
         
         if time_val:
@@ -554,51 +557,141 @@ class ReminderService:
             time_prefix = None
         
         action_text = raw_message.strip()
-        forbidden_actions = ['นะ', 'ครับ', 'ค่ะ', 'ด้วย', 'หน่อย', 'ที', 'ตอน', 'เวลา', 'ให้', 'นี้', 'ฉัน', '']
         
-        if action_text in forbidden_actions or len(action_text) < 2:
+        is_generic = action_text in ['นะ', 'ครับ', 'ค่ะ', 'ด้วย', 'หน่อย', 'ที', 'ตอน', 'เวลา', 'ให้', 'นี้', 'ฉัน', ''] or len(action_text) < 2
+        
+        if is_generic:
             action_text = self._extract_fallback_action(original, time_prefix is not None)
-            logger.info(f"[ReminderService] Normalize: used fallback action='{action_text}'")
+            logger.info(f"[ReminderService] Normalize: extracted fallback action='{action_text}'")
+        else:
+            action_text = self._minimal_clean(action_text)
+            logger.info(f"[ReminderService] Normalize: minimal cleaned action='{action_text}'")
+        
+        if action_text in ['เตือน', 'ช่วย', 'แจ้ง', 'ปลุก', ''] or len(action_text) < 2:
+            action_text = self._extract_fallback_action(original, time_prefix is not None)
+            logger.info(f"[ReminderService] Normalize: retry fallback action='{action_text}'")
         
         if time_prefix:
             normalized = f"{time_prefix} {action_text}"
-            logger.info(f"[ReminderService] Normalize: result='{normalized}'")
+            logger.info(f"[ReminderService] Normalize: final='{normalized}'")
             return normalized
         
+        logger.info(f"[ReminderService] Normalize: final_no_time='{action_text}'")
         return action_text
     
     def _extract_fallback_action(self, original: str, has_time: bool) -> str:
-        """Extract cleaner action text as fallback."""
+        """Extract semantic action from original message - preserve actual intent."""
         if not original:
             return "เตือน"
         
-        cleaned = original.lower()
+        msg = original.strip()
+        msg_lower = msg.lower()
         
-        prefixes = ['ช่วย', 'เตือน', 'แจ้งเตือน', 'อย่าลืม', 'ปลุก']
-        for prefix in prefixes:
-            if cleaned.startswith(prefix):
-                result = original[len(prefix):].strip()
-                if result and len(result) > 1:
-                    return result
+        logger.info(f"[ReminderService] Extract action from: '{msg}'")
+        
+        command_prefixes = ['ช่วย', 'เตือน', 'แจ้งเตือน', 'อย่าลืม', 'ปลุก']
+        
+        for prefix in command_prefixes:
+            if msg_lower.startswith(prefix):
+                remaining = msg[len(prefix):].strip()
+                if remaining:
+                    remaining = self._extract_after_time(remaining, msg_lower)
+                    if remaining and len(remaining) > 1:
+                        logger.info(f"[ReminderService] Extracted action after prefix: '{remaining}'")
+                        return remaining
         
         if has_time:
-            time_patterns = [
-                r'(\d{1,2})\s*โมงเย็น',
-                r'(\d{1,2})\s*โมงเช้า',
-                r'(\d{1,2})\s*โมง',
-                r'(\d{1,2}):(\d{2})',
-                r'ตอน\s*(\d{1,2})',
-            ]
-            for pattern in time_patterns:
-                match = re.search(pattern, cleaned)
-                if match:
-                    end_pos = match.end()
-                    if end_pos < len(original):
-                        result = original[end_pos:].strip()
-                        if result:
-                            return result
+            action = self._extract_after_time(msg, msg_lower)
+            if action and len(action) > 1:
+                logger.info(f"[ReminderService] Extracted action after time: '{action}'")
+                return action
         
-        return original[:50] if len(original) > 50 else original
+        if msg and len(msg) > 1:
+            cleaned = self._minimal_clean(msg)
+            if cleaned and len(cleaned) > 1:
+                logger.info(f"[ReminderService] Fallback cleaned action: '{cleaned}'")
+                return cleaned
+        
+        logger.warning(f"[ReminderService] Could not extract semantic action, using fallback")
+        return "เตือน"
+    
+    def _extract_after_time(self, text: str, text_lower: str) -> str:
+        """Extract action text appearing after time expression."""
+        time_patterns = [
+            r'\d{1,2}\s*โมงเย็น',
+            r'\d{1,2}\s*โมงเช้า', 
+            r'\d{1,2}\s*โมง',
+            r'\d{1,2}:\d{2}',
+            r'ตอน\s*\d{1,2}',
+            r'เวลา\s*\d{1,2}',
+        ]
+        
+        for pattern in time_patterns:
+            match = re.search(pattern, text_lower)
+            if match:
+                after = text[match.end():].strip()
+                if after:
+                    after = self._minimal_clean(after)
+                    return after
+        
+        return text.strip()
+    
+    def _minimal_clean(self, text: str) -> str:
+        """Minimal clean - only remove obvious scaffolding, preserve meaning."""
+        if not text:
+            return ""
+        
+        cleaned = text.strip()
+        
+        to_remove_start = [
+            'ฉัน', 'ผม', 'คุณ', 'ด้วย', 'นะ', 'ครับ', 'ค่ะ', 'หน่อย',
+            'ของ', 'วันนี้', 'วันพรุ่งนี้', 'พรุ่งนี้', 'ที', 'นี้'
+        ]
+        
+        for w in to_remove_start:
+            if cleaned.lower().startswith(w):
+                cleaned = cleaned[len(w):].strip()
+        
+        to_remove_patterns = [
+            r'^ตอน\s*', r'^เวลา\s*', r'^ของ\s*',
+        ]
+        
+        for pat in to_remove_patterns:
+            cleaned = re.sub(pat, '', cleaned, flags=re.IGNORECASE)
+        
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        
+        generic_only = ['เตือน', 'ช่วย', 'แจ้ง', 'ปลุก', 'นะ', 'ครับ', 'ค่ะ', '']
+        if cleaned in generic_only:
+            return ""
+        
+        return cleaned
+    
+    def _clean_action_text(self, text: str) -> str:
+        """Remove common Thai fragments and clean action text."""
+        if not text:
+            return "เตือน"
+        
+        cleaned = text.strip()
+        
+        fragments_to_remove = [
+            r'^ช่วย\s*', r'^เตือน\s*', r'^แจ้งเตือน\s*', r'^อย่าลืม\s*', r'^ปลุก\s*',
+            r'^ฉัน\s*', r'^ผม\s*', r'^คุณ\s*',
+            r'\s*ตอน\s+.*$', r'\s*เวลา\s+.*$', r'\s*ของ\s+.*$', r'\s*นี้\s*$',
+            r'\s*วันนี้\s*$', r'\s*พรุ่งนี้\s*$', r'\s*วันพรุ่งนี้\s*$',
+            r'^ตอน\s*', r'^เวลา\s*', r'^ของ\s*', r'^นี้\s*',
+        ]
+        
+        for pattern in fragments_to_remove:
+            cleaned = re.sub(pattern, '', cleaned, flags=re.IGNORECASE)
+        
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        
+        forbidden = ['นะ', 'ครับ', 'ค่ะ', 'ด้วย', 'หน่อย', 'ที', 'ตอน', 'เวลา', 'ให้', 'นี้', 'ฉัน', '']
+        if cleaned in forbidden or len(cleaned) < 2:
+            return "เตือน"
+        
+        return cleaned
     
     def format_reminder_list(self, reminders: List[Dict[str, Any]], title: str = "รายการเตือน") -> str:
         """

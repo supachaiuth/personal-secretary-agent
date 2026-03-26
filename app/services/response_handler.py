@@ -336,9 +336,20 @@ def get_response_for_action(
         if not has_time or not remind_at:
             return f"ต้องการให้เตือนกี่โมงครับ?", False
         
+        # Normalize the reminder message before saving
+        from app.services.reminder_service import reminder_service
+        parsed_for_normalize = {
+            "message": message,
+            "time": extracted_fields.get("time"),
+            "date": extracted_fields.get("date"),
+            "_original": extracted_fields.get("raw", "")
+        }
+        normalized_message = reminder_service.normalize_reminder_display(parsed_for_normalize)
+        logger.info(f"[ResponseHandler] Normalized reminder message: '{message}' -> '{normalized_message}'")
+        
         # CRITICAL: Validate before saving to DB
         reminder_data = {
-            "message": message,
+            "message": normalized_message,
             "remind_at": remind_at
         }
         if not is_valid_reminder(reminder_data):

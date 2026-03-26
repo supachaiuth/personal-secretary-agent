@@ -402,34 +402,52 @@ class ProactiveScheduler:
         
         task_items = []
         for a in tasks_created_list:
-            details = a.get("details", {})
+            details = a.get("activity_data", {})
             if isinstance(details, dict):
-                task_items.append(details.get("title", ""))
+                title = details.get("title", "")
+                logger.info(f"[Daily Summary] raw item: {title}")
+                if title and len(title.strip()) > 0:
+                    task_items.append(title)
+                    logger.info(f"[Daily Summary] extracted item text: {title}")
+                else:
+                    logger.warning(f"[Daily Summary] skipped empty item: {details}")
             else:
-                task_items.append(str(details))
+                logger.warning(f"[Daily Summary] skipped empty item: not dict - {details}")
         
         reminder_items = []
         for a in reminders_created_list:
-            details = a.get("details", {})
+            details = a.get("activity_data", {})
             if isinstance(details, dict):
-                reminder_items.append(details.get("message", ""))
+                msg = details.get("message", "")
+                logger.info(f"[Daily Summary] raw item: {msg}")
+                if msg and len(msg.strip()) > 0:
+                    reminder_items.append(msg)
+                    logger.info(f"[Daily Summary] extracted item text: {msg}")
+                else:
+                    logger.warning(f"[Daily Summary] skipped empty item: {details}")
             else:
-                reminder_items.append(str(details))
+                logger.warning(f"[Daily Summary] skipped empty item: not dict - {details}")
         
         pantry_items = []
         for a in pantry_updates_list:
-            details = a.get("details", {})
+            details = a.get("activity_data", {})
             if isinstance(details, dict):
                 action = details.get("action", "")
                 item = details.get("item_name", "")
-                if action == "add":
+                logger.info(f"[Daily Summary] raw pantry item: action={action}, item={item}")
+                if action == "add" and item:
                     pantry_items.append(f"เพิ่ม {item}")
-                elif action == "remove":
+                    logger.info(f"[Daily Summary] extracted item text: เพิ่ม {item}")
+                elif action == "remove" and item:
                     pantry_items.append(f"ลบ {item}")
-                else:
+                    logger.info(f"[Daily Summary] extracted item text: ลบ {item}")
+                elif item:
                     pantry_items.append(item)
+                    logger.info(f"[Daily Summary] extracted item text: {item}")
+                else:
+                    logger.warning(f"[Daily Summary] skipped empty item: {details}")
             else:
-                pantry_items.append(str(details))
+                logger.warning(f"[Daily Summary] skipped empty item: not dict - {details}")
         
         logger.info(f"[Daily Summary] Today items: tasks={tasks_created}, reminders={reminders_created}, pantry={pantry_updates}")
         
@@ -663,34 +681,40 @@ class ProactiveScheduler:
         
         if tasks_created > 0:
             lines.append(f"  • งานใหม่: {tasks_created}")
-            if task_items:
-                for item in task_items[:MAX_ITEMS]:
+            valid_tasks = [item for item in task_items if item and len(item.strip()) > 0]
+            if valid_tasks:
+                for item in valid_tasks[:MAX_ITEMS]:
                     lines.append(f"    - {item}")
-                if len(task_items) > MAX_ITEMS:
-                    lines.append(f"    (และอีก {len(task_items) - MAX_ITEMS} รายการ)")
-            logger.info(f"[Daily Summary] Tasks rendered: {min(len(task_items or []), MAX_ITEMS)}/{len(task_items or [])}")
+                if len(valid_tasks) > MAX_ITEMS:
+                    lines.append(f"    (และอีก {len(valid_tasks) - MAX_ITEMS} รายการ)")
+            rendered = min(len(valid_tasks), MAX_ITEMS) if valid_tasks else 0
+            logger.info(f"[Daily Summary] rendered items: {rendered}/{len(valid_tasks)} (valid/total)")
         else:
             lines.append("  • งานใหม่: 0")
         
         if reminders_created > 0:
             lines.append(f"  • เตือนใหม่: {reminders_created}")
-            if reminder_items:
-                for item in reminder_items[:MAX_ITEMS]:
+            valid_reminders = [item for item in reminder_items if item and len(item.strip()) > 0]
+            if valid_reminders:
+                for item in valid_reminders[:MAX_ITEMS]:
                     lines.append(f"    - {item}")
-                if len(reminder_items) > MAX_ITEMS:
-                    lines.append(f"    (และอีก {len(reminder_items) - MAX_ITEMS} รายการ)")
-            logger.info(f"[Daily Summary] Reminders rendered: {min(len(reminder_items or []), MAX_ITEMS)}/{len(reminder_items or [])}")
+                if len(valid_reminders) > MAX_ITEMS:
+                    lines.append(f"    (และอีก {len(valid_reminders) - MAX_ITEMS} รายการ)")
+            rendered = min(len(valid_reminders), MAX_ITEMS) if valid_reminders else 0
+            logger.info(f"[Daily Summary] rendered items: {rendered}/{len(valid_reminders)} (valid/total)")
         else:
             lines.append("  • เตือนใหม่: 0")
         
         if pantry_updates > 0:
             lines.append(f"  • อัปเดตตู้เย็น: {pantry_updates}")
-            if pantry_items:
-                for item in pantry_items[:MAX_ITEMS]:
+            valid_pantry = [item for item in pantry_items if item and len(item.strip()) > 0]
+            if valid_pantry:
+                for item in valid_pantry[:MAX_ITEMS]:
                     lines.append(f"    - {item}")
-                if len(pantry_items) > MAX_ITEMS:
-                    lines.append(f"    (และอีก {len(pantry_items) - MAX_ITEMS} รายการ)")
-            logger.info(f"[Daily Summary] Pantry rendered: {min(len(pantry_items or []), MAX_ITEMS)}/{len(pantry_items or [])}")
+                if len(valid_pantry) > MAX_ITEMS:
+                    lines.append(f"    (และอีก {len(valid_pantry) - MAX_ITEMS} รายการ)")
+            rendered = min(len(valid_pantry), MAX_ITEMS) if valid_pantry else 0
+            logger.info(f"[Daily Summary] rendered items: {rendered}/{len(valid_pantry)} (valid/total)")
         else:
             lines.append("  • อัปเดตตู้เย็น: 0")
         
