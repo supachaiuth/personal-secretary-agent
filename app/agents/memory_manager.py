@@ -28,18 +28,28 @@ class UserSession:
         self.last_message: str = ""
         self.last_update: datetime = datetime.now()
         self.context_history: list = []
+        self.pending_retry_count: int = 0  # Track clarification retries
     
     def update(self, pending_action: str = None, intent: str = None, needs_clarification: bool = False, collected_fields: Dict = None):
         """Update session with new action/intent information."""
         if pending_action:
             self.pending_action = pending_action
+            self.pending_retry_count = 0  # Reset retry on new pending
         self.current_intent = intent
         self.collected_fields = collected_fields or {}
         self.last_update = datetime.now()
         
         if needs_clarification:
-            # Extract missing fields from the message
             pass
+    
+    def increment_retry(self):
+        """Increment retry counter for pending flow."""
+        self.pending_retry_count += 1
+        return self.pending_retry_count
+    
+    def reset_retry(self):
+        """Reset retry counter."""
+        self.pending_retry_count = 0
     
     def add_context(self, message: str, response: str):
         """Add to conversation history."""
@@ -249,3 +259,60 @@ def get_persistent_memories(user_id: str, limit: int = 5):
     except Exception as e:
         logger.error(f"Error getting memories: {e}")
         return []
+
+
+CANCEL_PHRASES = [
+    "ยกเลิก", "ไม่แล้ว", "ช่างมัน", "ไม่ต้อง", "เอาไว้ก่อน",
+    "ยกเลิกการตั้งเตือน", "ไม่เอาแล้ว", "เลิก", "ปล่อย", "ลืม"
+]
+
+FRUSTRATION_KEYWORDS = [
+    "มึง", "กู", "ห่า", "แม่ม", "เหี้ย", "โง่", "ปัญญาอ่อน",
+    "พ่อง", "เหมือนสั่งน้ำมูก", "สั่งเหมือน", "ไร้สาระ",
+    "ไม่เก่ง", "ไม่ได้เรื่อง", "ไม่มีประโยชน์", "ไม่ฉลาด"
+]
+
+TOPIC_CHANGE_INDICATORS = [
+    "แล้วก็", "อีกเรื่อง", "เรื่องอื่น", "เปลี่ยนเรื่อง",
+    "ขอถาม", "ถามหน่อย", "มีเรื่อง", "อยากรู้"
+]
+
+
+def classify_reminder_followup(user_message: str) -> str:
+    """
+    Classify a follow-up message in pending reminder flow.
+    
+    Returns:
+        - "valid_time_reply": Contains valid time for reminder
+        - "explicit_cancel": User wants to cancel
+        - "topic_change": User changed topic or unrelated
+        - "frustration": User is frustrated/angry
+        - "invalid_time_reply": Time parsing failed but message is Thai
+    """
+    msg_lower = user_message.lower().strip()
+    
+    if any(phrase in msg_lower for phrase in CANCEL_PHRASES):
+        logger.info(f"[ReminderFollowup] Classification: explicit_cancel")
+        return "explicit_cancel"
+    
+    if any(kw in msg_lower for kw in FRUSTRATION_KEYWORDS):
+        logger.info(f"[ReminderFollowup] Classification: frustration")
+        return "frustration"
+    
+    if any(indicator in msg_lower for indicator in TOPIC_CHANGE_INDICATORS):
+        logger.info(f"[ReminderFollowup] Classification: topic_change")
+        return "topic_change"
+    
+    from app.services.reminder_service import reminder_service
+    parsed = reminder_service.parse_reminder_message(user_message)
+    
+    if parsed.get("has_time") and parsed.get("time"):
+        logger.info(f"[ReminderFollowup] Classification: valid_time_reply")
+        return "valid_time_reply"
+    
+    if any(kw in msg_lower for kw in ["โมง", "บ่าย", "เช้า", "เย็น", "ทุ่ม", "ตี", "น.", ":", "เวลา"]):
+        logger.info(f"[ReminderFollowup] Classification: invalid_time_reply (time-like but not parsed)")
+        return "invalid_time_reply"
+    
+    logger.info(f"[ReminderFollowup] Classification: topic_change (no time detected)")
+    return "topic_change"

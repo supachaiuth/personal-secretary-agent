@@ -51,24 +51,55 @@ def handle_pending_action(
     Returns:
         (response_text, is_complete)
     """
-    session = get_session_context(line_user_id)
-    pending_action = session.get("pending_action")
+    from app.agents.memory_manager import get_session, classify_reminder_followup
+    
+    session = get_session(line_user_id)
+    pending_action = session.pending_action
+    retry_count = session.pending_retry_count
     
     if not pending_action:
         return None, False
     
     logger.info(f"[Webhook] ===== PENDING ACTION DETECTED =====")
     logger.info(f"[Webhook] pending_action: {pending_action}")
-    logger.info(f"[Webhook] Session collected_fields: {session.get('collected_fields')}")
+    logger.info(f"[Webhook] Session collected_fields: {session.collected_fields}")
     logger.info(f"[Webhook] User message: {user_message}")
-    
-    # CRITICAL: Start with FRESH fields, do NOT merge old data incorrectly
-    merged_fields = {}
+    logger.info(f"[Webhook] Retry count: {retry_count}")
     
     if pending_action == "create_reminder":
+        classification = classify_reminder_followup(user_message)
+        logger.info(f"[Webhook] Follow-up classification: {classification}, retry={retry_count}")
+        
+        MAX_RETRIES = 2
+        
+        if classification == "explicit_cancel":
+            clear_session(line_user_id)
+            logger.info(f"[Webhook] Reminder cancelled by user, session cleared")
+            return "ได้ครับ ยกเลิกการตั้งเตือนให้แล้ว", True
+        
+        if classification == "frustration" or classification == "topic_change":
+            if retry_count >= MAX_RETRIES:
+                clear_session(line_user_id)
+                logger.info(f"[Webhook] Max retries exceeded, session cleared")
+                return "ขอโทษครับ ผมเข้าใจแล้ว ถ้าต้องการตั้งเตือนใหม่ พิมพ์มาได้เลยนะครับ", True
+            else:
+                session.increment_retry()
+                return "ขอโทษครับ ยังไม่เห็นเวลาแจ้งเตือน ถ้าต้องการยกเลิกพิมพ์ 'ยกเลิก' ได้ครับ", False
+        
+        if classification == "invalid_time_reply":
+            if retry_count >= MAX_RETRIES:
+                clear_session(line_user_id)
+                logger.info(f"[Webhook] Max retries exceeded (invalid), session cleared")
+                return "ผมยกเลิกการตั้งเตือนให้ก่อนนะครับ ถ้าต้องการตั้งใหม่ พิมพ์มาได้เลย", True
+            else:
+                session.increment_retry()
+                return "ยังไม่เห็นเวลาแจ้งเตือนครับ ถ้าต้องการยกเลิกพิมพ์ 'ยกเลิก' ได้", False
+        
+        merged_fields = {}
+        
         from app.services.reminder_service import reminder_service
         
-        existing = session.get("collected_fields", {})
+        existing = session.collected_fields or {}
         original_message = existing.get("message", "")
         
         logger.info(f"[Webhook] Original message from session: '{original_message}'")
