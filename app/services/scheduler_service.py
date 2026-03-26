@@ -390,10 +390,48 @@ class ProactiveScheduler:
         today_start = datetime.now(BANGKOK_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
         
         activities_result = supabase.table("activity_logs").select("*").eq("user_id", user_id).gte("created_at", today_start.isoformat()).execute()
+        activities = activities_result.data or []
         
-        tasks_created = sum(1 for a in (activities_result.data or []) if a.get("activity_type") == "task_created")
-        reminders_created = sum(1 for a in (activities_result.data or []) if a.get("activity_type") == "reminder_created")
-        pantry_updates = sum(1 for a in (activities_result.data or []) if a.get("activity_type") == "pantry_updated")
+        tasks_created_list = [a for a in activities if a.get("activity_type") == "task_created"]
+        reminders_created_list = [a for a in activities if a.get("activity_type") == "reminder_created"]
+        pantry_updates_list = [a for a in activities if a.get("activity_type") == "pantry_updated"]
+        
+        tasks_created = len(tasks_created_list)
+        reminders_created = len(reminders_created_list)
+        pantry_updates = len(pantry_updates_list)
+        
+        task_items = []
+        for a in tasks_created_list:
+            details = a.get("details", {})
+            if isinstance(details, dict):
+                task_items.append(details.get("title", ""))
+            else:
+                task_items.append(str(details))
+        
+        reminder_items = []
+        for a in reminders_created_list:
+            details = a.get("details", {})
+            if isinstance(details, dict):
+                reminder_items.append(details.get("message", ""))
+            else:
+                reminder_items.append(str(details))
+        
+        pantry_items = []
+        for a in pantry_updates_list:
+            details = a.get("details", {})
+            if isinstance(details, dict):
+                action = details.get("action", "")
+                item = details.get("item_name", "")
+                if action == "add":
+                    pantry_items.append(f"เพิ่ม {item}")
+                elif action == "remove":
+                    pantry_items.append(f"ลบ {item}")
+                else:
+                    pantry_items.append(item)
+            else:
+                pantry_items.append(str(details))
+        
+        logger.info(f"[Daily Summary] Today items: tasks={tasks_created}, reminders={reminders_created}, pantry={pantry_updates}")
         
         upcoming_result = supabase.table("reminders").select("*").eq("user_id", user_id).eq("sent", False).gte("remind_at", datetime.now(BANGKOK_TZ).isoformat()).execute()
         upcoming = upcoming_result.data or []
@@ -403,7 +441,7 @@ class ProactiveScheduler:
         
         today_parking = self.get_today_parking_memory(user_id)
         
-        message = self._format_daily_summary(display_name, tasks_created, reminders_created, pantry_updates, upcoming, today_parking)
+        message = self._format_daily_summary(display_name, tasks_created, reminders_created, pantry_updates, upcoming, today_parking, task_items, reminder_items, pantry_items)
         
         if push_message(line_user_id, message):
             supabase.table("summary_logs").insert({
@@ -604,14 +642,57 @@ class ProactiveScheduler:
         
         return "\n".join(lines)
     
-    def _format_daily_summary(self, display_name: str, tasks_created: int, reminders_created: int, pantry_updates: int, upcoming: List[Dict], today_parking: Optional[Dict] = None) -> str:
-        """Format daily summary message."""
+    def _format_daily_summary(
+        self,
+        display_name: str,
+        tasks_created: int,
+        reminders_created: int,
+        pantry_updates: int,
+        upcoming: List[Dict],
+        today_parking: Optional[Dict] = None,
+        task_items: List[str] = None,
+        reminder_items: List[str] = None,
+        pantry_items: List[str] = None
+    ) -> str:
+        """Format daily summary message with itemized breakdown."""
+        MAX_ITEMS = 3
+        
         lines = ["🌙 สรุปประจำวัน", ""]
         
         lines.append("📊 วันนี้:")
-        lines.append(f"  • งานใหม่: {tasks_created}")
-        lines.append(f"  • เตือนใหม่: {reminders_created}")
-        lines.append(f"  • อัปเดตตู้เย็น: {pantry_updates}")
+        
+        if tasks_created > 0:
+            lines.append(f"  • งานใหม่: {tasks_created}")
+            if task_items:
+                for item in task_items[:MAX_ITEMS]:
+                    lines.append(f"    - {item}")
+                if len(task_items) > MAX_ITEMS:
+                    lines.append(f"    (และอีก {len(task_items) - MAX_ITEMS} รายการ)")
+            logger.info(f"[Daily Summary] Tasks rendered: {min(len(task_items or []), MAX_ITEMS)}/{len(task_items or [])}")
+        else:
+            lines.append("  • งานใหม่: 0")
+        
+        if reminders_created > 0:
+            lines.append(f"  • เตือนใหม่: {reminders_created}")
+            if reminder_items:
+                for item in reminder_items[:MAX_ITEMS]:
+                    lines.append(f"    - {item}")
+                if len(reminder_items) > MAX_ITEMS:
+                    lines.append(f"    (และอีก {len(reminder_items) - MAX_ITEMS} รายการ)")
+            logger.info(f"[Daily Summary] Reminders rendered: {min(len(reminder_items or []), MAX_ITEMS)}/{len(reminder_items or [])}")
+        else:
+            lines.append("  • เตือนใหม่: 0")
+        
+        if pantry_updates > 0:
+            lines.append(f"  • อัปเดตตู้เย็น: {pantry_updates}")
+            if pantry_items:
+                for item in pantry_items[:MAX_ITEMS]:
+                    lines.append(f"    - {item}")
+                if len(pantry_items) > MAX_ITEMS:
+                    lines.append(f"    (และอีก {len(pantry_items) - MAX_ITEMS} รายการ)")
+            logger.info(f"[Daily Summary] Pantry rendered: {min(len(pantry_items or []), MAX_ITEMS)}/{len(pantry_items or [])}")
+        else:
+            lines.append("  • อัปเดตตู้เย็น: 0")
         
         if upcoming:
             lines.append("")
