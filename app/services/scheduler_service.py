@@ -344,7 +344,7 @@ class ProactiveScheduler:
         today_start = datetime.now(BANGKOK_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
         today_end = today_start + timedelta(days=1)
         
-        tasks_result = supabase.table("tasks").select("*").eq("user_id", user_id).in_("status", ["pending", "in_progress"]).execute()
+        tasks_result = supabase.table("tasks").select("*").eq("user_id", user_id).in_("status", ["pending", "in_progress"]).order("created_at", desc=True).execute()
         pending_tasks = [t for t in (tasks_result.data or []) if t.get("due_date") and t.get("due_date")[:10] == today_start.strftime("%Y-%m-%d")]
         
         reminders_result = supabase.table("reminders").select("*").eq("user_id", user_id).eq("sent", False).execute()

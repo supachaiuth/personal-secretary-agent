@@ -92,9 +92,19 @@ def _build_task_list_response(user_id: Optional[str], user_name: str) -> str:
         if not pending_tasks:
             return f"{user_name}ไม่มีงานที่รอดำเนินการ! สบายแล้วครับ ✅"
         
-        task_list = "\n".join([f"• {t.get('title', '')}" for t in pending_tasks[:5]])
+        shown_tasks = pending_tasks[:5]
+        truncated = len(pending_tasks) > 5
         
-        display_note = f" (แสดง 5 รายการล่าสุด)" if len(pending_tasks) > 5 else ""
+        if truncated:
+            logger.info(f"[TaskList] Tasks shown: {len(shown_tasks)}, truncated: {len(pending_tasks) - len(shown_tasks)} more")
+        
+        if shown_tasks:
+            newest = shown_tasks[0].get("title", "")
+            logger.info(f"[TaskList] Newest task: '{newest}'")
+        
+        task_list = "\n".join([f"• {t.get('title', '')}" for t in shown_tasks])
+        
+        display_note = f" (แสดง 5 รายการล่าสุด)" if truncated else ""
         
         return f"{user_name}มีงานที่ต้องทำดังนี้:{display_note}\n{task_list}"
     except Exception as e:
@@ -178,7 +188,7 @@ def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: 
             except Exception:
                 pass
     
-    task_result = supabase.table("tasks").select("*").eq("user_id", user_id).in_("status", ["pending", "in_progress"]).execute()
+    task_result = supabase.table("tasks").select("*").eq("user_id", user_id).in_("status", ["pending", "in_progress"]).order("created_at", desc=True).execute()
     tasks_raw = task_result.data or []
     
     for task in tasks_raw:
