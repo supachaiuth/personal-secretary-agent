@@ -7,7 +7,7 @@ class TaskRepository:
         self.client = client or get_supabase()
 
     def get_by_user_id(self, user_id: str):
-        return self.client.table("tasks").select("*").eq("user_id", user_id).execute()
+        return self.client.table("tasks").select("*").eq("user_id", user_id).order("created_at", desc=True).execute()
 
     def create(self, user_id: str, title: str, due_date: str = None):
         return self.client.table("tasks").insert({

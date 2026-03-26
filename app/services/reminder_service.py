@@ -1,7 +1,7 @@
 """
 Reminder service for managing user reminders.
 """
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
 import re
 import logging
@@ -372,64 +372,89 @@ class ReminderService:
         logger.info(f"[ReminderService] Final time: {time}, has_time={has_time}, hour={hour}")
         
         # ===== CLEAN MESSAGE =====
+        original_message_for_debug = message_lower
         cleaned = message_lower
         
+        logger.info(f"[ReminderService] Clean: original='{original_message_for_debug}'")
+        
         # FIRST: Remove reminder command words (before anything else)
-        # More aggressive - remove "ช่วย" prefix separately
         cleaned = re.sub(r'^ช่วย\s+', '', cleaned)
         cleaned = re.sub(r'^(เตือน|แจ้งเตือน)\s*', '', cleaned)
         cleaned = re.sub(r'\s+(เตือน|แจ้งเตือน)\s+', ' ', cleaned)
         cleaned = re.sub(r'^(อย่าลืม)\s*', '', cleaned)
         
-        # Also remove common fillers at start
         cleaned = re.sub(r'^(หน่อย|นะ|ครับ|ค่ะ|ด้วย)\s*', '', cleaned)
         
-        # Remove time words EXHAUSTIVELY
-        time_words = [
-            'บ่ายสอง', 'บ่าย2', 'บ่าย 2', 'บ่ายสองโมง',
-            'บ่ายสาม', 'บ่าย3', 'บ่าย 3', 'บ่ายสามโมง',
-            'บ่ายสี่', 'บ่าย4', 'บ่าย 4', 'บ่ายสี่โมง',
-            'บ่ายห้า', 'บ่าย5', 'บ่าย 5',
-            'บ่าย', 'ตอนบ่าย',
-            'เช้า', 'เช้ามาก', 'ตอนเช้า', 'โมงเช้า',
-            'เย็น', 'ตอนเย็น', 'โมงเย็น',
-            'ทุ่ม', 'ตอนทุ่ม',
-            'ตีหนึ่ง', 'ตี1', 'ตีสอง', 'ตี2', 'ตีสาม', 'ตี3',
-            'ตีสี่', 'ตี4', 'ตีห้า', 'ตี5',
-            'ตีหก', 'ตี6', 'ตีเจ็ด', 'ตี7', 'ตีแปด', 'ตี8',
-            'ตีเก้า', 'ตี9', 'ตีสิบ', 'ตี10',
+        detected_date_phrase = None
+        date_patterns = [
+            (r'วันพรุ่งนี้', 'วันพรุ่งนี้'),
+            (r'พรุ่งนี้', 'พรุ่งนี้'),
+            (r'มะรืนนี้', 'มะรืนนี้'),
+            (r'วันนี้', 'วันนี้'),
+            (r'พรุ่ง(?=\s|$)', 'พรุ่ง'),
+            (r'วันพรุ่ง(?=\s|$)', 'วันพรุ่ง'),
         ]
-        for tw in time_words:
-            cleaned = cleaned.replace(tw, ' ')
+        for pattern, phrase in date_patterns:
+            if re.search(pattern, cleaned):
+                detected_date_phrase = phrase
+                cleaned = re.sub(pattern, ' ', cleaned)
+                logger.info(f"[ReminderService] Clean: removed date phrase '{phrase}'")
+                break
         
-        # Remove X โมง patterns
-        cleaned = re.sub(r'\d{1,2}\s*โมง', ' ', cleaned)
-        # Remove X ทุ่ม patterns
-        cleaned = re.sub(r'\d{1,2}\s*ทุ่ม', ' ', cleaned)
-        # Remove ตีX patterns
-        cleaned = re.sub(r'ตี\d{1,2}', ' ', cleaned)
-        # Remove X นาที patterns
-        cleaned = re.sub(r'\d{1,2}\s*นาที', ' ', cleaned)
+        detected_time_phrase = None
+        time_patterns = [
+            (r'บ่ายสอง', 'บ่ายสอง'),
+            (r'บ่าย\s*2', 'บ่าย 2'),
+            (r'บ่ายสาม', 'บ่ายสาม'),
+            (r'บ่าย\s*3', 'บ่าย 3'),
+            (r'บ่ายสี่', 'บ่ายสี่'),
+            (r'บ่าย\s*4', 'บ่าย 4'),
+            (r'บ่ายห้า', 'บ่ายห้า'),
+            (r'บ่าย\s*5', 'บ่าย 5'),
+            (r'\d{1,2}\s*โมงเช้า', None),
+            (r'\d{1,2}\s*โมงเย็น', None),
+            (r'\d{1,2}\s*โมง', None),
+            (r'\d{1,2}\s*ทุ่ม', None),
+            (r'ตี\d{1,2}', None),
+            (r'\d{1,2}\s*นาที', None),
+        ]
         
-        # Remove standalone numbers (orphaned after time word removal)
-        cleaned = re.sub(r'(^|\s)\d+(\s|$)', ' ', cleaned)
+        for pattern, _ in time_patterns:
+            match = re.search(pattern, cleaned)
+            if match:
+                detected_time_phrase = match.group(0)
+                cleaned = re.sub(pattern, ' ', cleaned, count=1)
+                logger.info(f"[ReminderService] Clean: removed time phrase '{detected_time_phrase}'")
+                break
         
-        # Remove pronouns
-        for pronoun in ['ฉัน', 'ผม', 'เขา', 'คุณ', 'ด้วย', 'นะ', 'ครับ', 'ค่ะ']:
-            if cleaned.startswith(pronoun):
-                cleaned = cleaned[len(pronoun):]
-        cleaned = re.sub(r'\s+(ฉัน|ผม|เขา|คุณ|ด้วย|นะ|ครับ|ค่ะ)\b', ' ', cleaned)
-        
-        # Remove date words
-        cleaned = re.sub(r'(พรุ่งนี้|วันพรุ่ง|มะรืนนี้|วันนี้)', '', cleaned)
-        
-        # Remove HH:MM
+        cleaned = re.sub(r'ตอน\s*\d+', ' ', cleaned)
+        cleaned = re.sub(r'เวลา\s*\d+', ' ', cleaned)
         cleaned = re.sub(r'\d{1,2}:\d{2}', ' ', cleaned)
         
-        # Final cleanup
         cleaned = re.sub(r'\s+', ' ', cleaned).strip()
         
-        logger.info(f"[ReminderService] Cleaned message: '{cleaned}'")
+        logger.info(f"[ReminderService] Clean: before_fallback='{cleaned}'")
+        
+        is_low_quality = (
+            not cleaned or
+            len(cleaned) < 3 or
+            cleaned in ['นะ', 'ครับ', 'ค่ะ', 'ด้วย', 'หน่อย', 'ที', 'ตอน', 'เวลา', 'ให้']
+        )
+        
+        fallback_triggered = False
+        if is_low_quality:
+            fallback_triggered = True
+            cleaned = original_message
+            cleaned = re.sub(r'^(ช่วย|เตือน|แจ้งเตือน|อย่าลืม)\s*', '', cleaned)
+            cleaned = re.sub(r'\s+(พรุ่งนี้|วันนี้|มะรืนนี้|วันพรุ่งนี้)\s+', ' ', cleaned)
+            cleaned = re.sub(r'\d{1,2}\s*โมง.*$', '', cleaned)
+            cleaned = re.sub(r'\d{1,2}:\d{2}.*$', '', cleaned)
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+            logger.info(f"[ReminderService] Clean: fallback triggered, safe_text='{cleaned}'")
+        
+        cleaned_final = cleaned
+        
+        logger.info(f"[ReminderService] Clean: after_normalize='{cleaned_final}', date_phrase='{detected_date_phrase}', time_phrase='{detected_time_phrase}', fallback={fallback_triggered}")
         
         # ===== CALCULATE REMIND_AT =====
         # CRITICAL: User says "8 โมง" which is Bangkok time (UTC+7)
@@ -456,7 +481,7 @@ class ReminderService:
             logger.info(f"[ReminderService] Bangkok: {reminder_datetime_bangkok} -> UTC: {remind_at}")
         
         return {
-            "message": cleaned if cleaned else original_message,
+            "message": cleaned_final if cleaned_final else original_message,
             "date": date,
             "time": time,
             "has_time": has_time,
@@ -500,13 +525,130 @@ class ReminderService:
         
         try:
             dt = datetime.fromisoformat(remind_at.replace("Z", "+00:00"))
-            # Convert to Bangkok timezone
             bangkok_time = dt.astimezone() if dt.tzinfo else dt
-            formatted_date = bangkok_time.strftime("%d/%m/%Y เวลา %H:%M น.")
+            formatted_date = bangkok_time.strftime("วันที่ %d/%m/%Y เวลา %H:%M น.")
         except Exception:
             formatted_date = remind_at
         
         return f"✅ เตือน '{message}' ไว้เมื่อ {formatted_date} ครับ!"
+    
+    def normalize_reminder_display(self, parsed: Dict[str, Any]) -> str:
+        """
+        Generate normalized user-facing display text for a reminder.
+        
+        Format: "HH:MM ความหมาย" or fallback to cleaned message if no time.
+        """
+        time_val = parsed.get("time")
+        raw_message = parsed.get("message", "")
+        original = parsed.get("_original", "")
+        
+        logger.info(f"[ReminderService] Normalize: time={time_val}, raw_message='{raw_message}'")
+        
+        if time_val:
+            try:
+                hour, minute = map(int, time_val.split(":"))
+                time_prefix = f"{hour:02d}:{minute:02d}"
+            except (ValueError, AttributeError):
+                time_prefix = time_val
+        else:
+            time_prefix = None
+        
+        action_text = raw_message.strip()
+        forbidden_actions = ['นะ', 'ครับ', 'ค่ะ', 'ด้วย', 'หน่อย', 'ที', 'ตอน', 'เวลา', 'ให้', 'นี้', 'ฉัน', '']
+        
+        if action_text in forbidden_actions or len(action_text) < 2:
+            action_text = self._extract_fallback_action(original, time_prefix is not None)
+            logger.info(f"[ReminderService] Normalize: used fallback action='{action_text}'")
+        
+        if time_prefix:
+            normalized = f"{time_prefix} {action_text}"
+            logger.info(f"[ReminderService] Normalize: result='{normalized}'")
+            return normalized
+        
+        return action_text
+    
+    def _extract_fallback_action(self, original: str, has_time: bool) -> str:
+        """Extract cleaner action text as fallback."""
+        if not original:
+            return "เตือน"
+        
+        cleaned = original.lower()
+        
+        prefixes = ['ช่วย', 'เตือน', 'แจ้งเตือน', 'อย่าลืม', 'ปลุก']
+        for prefix in prefixes:
+            if cleaned.startswith(prefix):
+                result = original[len(prefix):].strip()
+                if result and len(result) > 1:
+                    return result
+        
+        if has_time:
+            time_patterns = [
+                r'(\d{1,2})\s*โมงเย็น',
+                r'(\d{1,2})\s*โมงเช้า',
+                r'(\d{1,2})\s*โมง',
+                r'(\d{1,2}):(\d{2})',
+                r'ตอน\s*(\d{1,2})',
+            ]
+            for pattern in time_patterns:
+                match = re.search(pattern, cleaned)
+                if match:
+                    end_pos = match.end()
+                    if end_pos < len(original):
+                        result = original[end_pos:].strip()
+                        if result:
+                            return result
+        
+        return original[:50] if len(original) > 50 else original
+    
+    def format_reminder_list(self, reminders: List[Dict[str, Any]], title: str = "รายการเตือน") -> str:
+        """
+        Format a list of reminders with proper time sorting.
+        
+        - Timed items sorted by time ascending
+        - Untimed items in separate section
+        """
+        if not reminders:
+            return f"{title}:\n  ไม่มีรายการ"
+        
+        timed = []
+        untimed = []
+        
+        for rem in reminders:
+            remind_at = rem.get("remind_at", "")
+            message = rem.get("message", "")
+            
+            if remind_at:
+                try:
+                    dt = datetime.fromisoformat(remind_at.replace("Z", "+00:00"))
+                    bangkok = dt.astimezone() if dt.tzinfo else dt
+                    minutes = bangkok.hour * 60 + bangkok.minute
+                    timed.append({
+                        "minutes": minutes,
+                        "time_str": bangkok.strftime("%H:%M"),
+                        "message": message,
+                        "remind_at": remind_at
+                    })
+                except Exception:
+                    untimed.append({"message": message, "remind_at": remind_at})
+            else:
+                untimed.append({"message": message, "remind_at": remind_at})
+        
+        timed.sort(key=lambda x: x["minutes"])
+        
+        logger.info(f"[ReminderService] List: timed_count={len(timed)}, untimed_count={len(untimed)}")
+        
+        lines = [title]
+        
+        for item in timed:
+            lines.append(f"  • {item['time_str']} {item['message']}")
+        
+        if untimed:
+            lines.append("")
+            lines.append("📝 อื่นๆ:")
+            for item in untimed:
+                lines.append(f"  • {item['message']}")
+        
+        return "\n".join(lines)
 
 
 reminder_service = ReminderService()

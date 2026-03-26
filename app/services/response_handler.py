@@ -80,14 +80,25 @@ def _build_task_list_response(user_id: Optional[str], user_name: str) -> str:
         result = task_repo.get_by_user_id(user_id)
         tasks = result.data if result.data else []
         
+        logger.info(f"[TaskList] Tasks fetched: {len(tasks)}")
+        
+        if not tasks:
+            return f"{user_name}ยังไม่มีงานเลย สบายครับ ✅"
+        
         pending_tasks = [t for t in tasks if t.get("status") == "pending"]
+        
+        logger.info(f"[TaskList] Pending tasks: {len(pending_tasks)}")
         
         if not pending_tasks:
             return f"{user_name}ไม่มีงานที่รอดำเนินการ! สบายแล้วครับ ✅"
         
         task_list = "\n".join([f"• {t.get('title', '')}" for t in pending_tasks[:5]])
-        return f"{user_name}มีงานที่ต้องทำดังนี้:\n{task_list}"
+        
+        display_note = f" (แสดง 5 รายการล่าสุด)" if len(pending_tasks) > 5 else ""
+        
+        return f"{user_name}มีงานที่ต้องทำดังนี้:{display_note}\n{task_list}"
     except Exception as e:
+        logger.error(f"[TaskList] Error: {e}")
         return f"{user_name}มีรายการงานดังนี้:\n• งานที่ 1\n• งานที่ 2"
 
 
