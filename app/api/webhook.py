@@ -101,6 +101,8 @@ def handle_pending_action(
         
         existing = session.collected_fields or {}
         original_message = existing.get("message", "")
+        existing_date = existing.get("date", "today")
+        existing_time = existing.get("time")
         
         logger.info(f"[Webhook] Original message from session: '{original_message}'")
         
@@ -124,13 +126,43 @@ def handle_pending_action(
             final_message = ""
             logger.info(f"[Webhook] No valid message, will need clarification")
         
-        final_time = parsed.get("time") or existing.get("time")
-        final_date = parsed.get("date") or existing.get("date")
+        parsed_date = parsed.get("date", "today")
+        parsed_time = parsed.get("time")
+        parsed_message = parsed.get("message", "")
         
-        if parsed.get("time"):
-            final_time = parsed.get("time")
-        if parsed.get("date"):
-            final_date = parsed.get("date")
+        explicit_date_patterns = [
+            "พรุ่งนี้", "วันพรุ่ง", "มะรืนนี้", "มะรืน", "วันนี้",
+            "วันจันทร์", "วันอังคาร", "วันพุธ", "วันพฤหัสบดี", "วันศุกร์", "วันเสาร์", "วันอาทิตย์",
+            "วันจันทร์หน้า", "วันอังคารหน้า", "วันพุธหน้า", "วันพฤหัสหน้า", "วันศุกร์หน้า"
+        ]
+        msg_lower = user_message.lower()
+        has_explicit_new_date = any(pattern in msg_lower for pattern in explicit_date_patterns)
+        
+        logger.info(f"[ReminderMerge] existing_date={existing_date}, parsed_date={parsed_date}, explicit_new_date={has_explicit_new_date}")
+        
+        if has_explicit_new_date:
+            final_date = parsed_date
+            logger.info(f"[ReminderMerge] Explicit new date detected, override: {final_date}")
+        elif existing_date and existing_date != "today" and parsed_time:
+            final_date = existing_date
+            logger.info(f"[ReminderMerge] Keep existing date (time-only reply): {final_date}")
+        elif existing_date and existing_date != "today":
+            final_date = existing_date
+            logger.info(f"[ReminderMerge] Keep existing date (no date in follow-up): {final_date}")
+        else:
+            final_date = parsed_date or existing.get("date", "today")
+            logger.info(f"[ReminderMerge] Using parsed date: {final_date}")
+        
+        final_time = parsed_time or existing_time
+        
+        if parsed_time:
+            final_time = parsed_time
+            logger.info(f"[ReminderMerge] parsed_time={parsed_time}, final_time={final_time}")
+        elif existing_time:
+            final_time = existing_time
+            logger.info(f"[ReminderMerge] using existing_time={existing_time}, final_time={final_time}")
+        
+        logger.info(f"[ReminderMerge] final_message={final_message}, final_date={final_date}, final_time={final_time}")
         
         final_has_time = parsed.get("has_time", False) or existing.get("has_time", False) or final_time is not None
         

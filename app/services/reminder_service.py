@@ -257,16 +257,17 @@ class ReminderService:
         hour = None
         minute = 0
         
-        # NORMALIZE: Convert 18.00 -> 18:00, 18.00 น -> 18:00, 18.00 น. -> 18:00
-        message_normalized = re.sub(r'(\d{1,2})\.(\d{2})\s*น\b', r'\1:\2', message_lower)
-        message_normalized = re.sub(r'(\d{1,2})\.(\d{2})\s*น\.', r'\1:\2', message_normalized)
-        message_normalized = re.sub(r'(\d{1,2})\.(\d{2})\s*นาที', r'\1:\2', message_normalized)
-        message_for_time = re.sub(r'(\d{1,2})\.(\d{2})\s*น\b', r'\1:\2', message_for_time)
-        message_for_time = re.sub(r'(\d{1,2})\.(\d{2})\s*น\.', r'\1:\2', message_for_time)
-        message_for_time = re.sub(r'(\d{1,2})\.(\d{2})\s*นาที', r'\1:\2', message_for_time)
+        # NORMALIZE: Convert decimal time formats FIRST (before other patterns)
+        # Handles: "6.00 โมง" -> "6:00", "11.15 โมง" -> "11:15", "7.30" -> "7:30"
+        decimal_pattern = r'(\d{1,2})\.(\d{2})(?:\s*โมง|\s*น\.?|\s*นาที)?'
+        message_normalized = re.sub(decimal_pattern, r'\1:\2', message_lower)
+        message_for_time = re.sub(decimal_pattern, r'\1:\2', message_for_time)
         
         if message_normalized != message_lower:
-            logger.info(f"[ReminderService] Normalized time: {message_lower} -> {message_normalized}")
+            logger.info(f"[TimeParser] raw_input={message_lower}")
+            logger.info(f"[TimeParser] matched_decimal_time={message_normalized}")
+        
+        message_lower = message_normalized
         
         message_lower = message_normalized
         
@@ -360,6 +361,8 @@ class ReminderService:
                 hour = int(clock_match.group(1))
                 minute = int(clock_match.group(2))
                 time = f"{hour:02d}:{minute:02d}"
+                logger.info(f"[TimeParser] raw_input={message_lower}")
+                logger.info(f"[TimeParser] matched_colon_time={time}")
                 logger.info(f"[ReminderService] Detected HH:MM -> {time}")
         
         # RULE 6: Check Thai minute patterns like "9 โมง 5 นาที" or "9 โมง 30 นาที"
@@ -371,6 +374,7 @@ class ReminderService:
                 logger.info(f"[ReminderService] Detected X นาที -> {time}")
         
         has_time = time is not None
+        logger.info(f"[TimeParser] final_time={time}")
         logger.info(f"[ReminderService] Final time: {time}, has_time={has_time}, hour={hour}")
         
         # ===== CLEAN MESSAGE =====
