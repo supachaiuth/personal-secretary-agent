@@ -21,11 +21,13 @@ MAX_HISTORY_TURNS = 4
 
 
 PARKING_UPDATE_PATTERNS = [
-    r"จอดรถชั้น\s*(\S+)",
-    r"จอดรถ\s*ชั้น\s*(\S+)",
-    r"จอดรถ\s*(.+)$",
-    r"parking\s*(.+)$",
-    r"จอด\s*(.+)$",
+    r"จอดรถชั้น\s*([0-9A-Za-zก-๙]+)",
+    r"จอดรถ\s*ชั้น\s*([0-9A-Za-zก-๙]+)",
+    r"รถอยู่ชั้น\s*([0-9A-Za-zก-๙]+)",
+    r"จอดรถไว้\s*([0-9A-Za-zก-๙]+)",
+    r"จอด\s*ชั้น\s*([0-9A-Za-zก-๙]+)",
+    r"จอด\s*([A-Za-z0-9ก-๙]{1,5})$",
+    r"parking\s*([A-Za-z0-9ก-๙]{1,5})$",
 ]
 
 PARKING_QUERY_PATTERNS = [
@@ -33,25 +35,59 @@ PARKING_QUERY_PATTERNS = [
     r"รถจอดไว้ที่ไหน",
     r"รถอยู่ไหน",
     r"จอดรถที่ไหน",
+    r"รถอยู่ที่ไหน",
+    r"จอดรถชั้นไหน",
+    r"จอดรถไหน",
+    r"ผมจอดรถไว้ไหน",
+    r"รถอยู่ตรงไหน",
+    r"parking\s*where",
     r"where\s*parking",
 ]
 
+PARKING_EXCLUDE_WORDS = [
+    "ไหน", "ที่ไหน", "ตรงไหน", "อยู่ไหน", "ชั้นไหน", "ไหนครับ", "ไหนคะ",
+    "where", "which", "location", "ที่", "อยู่"
+]
+
+
+def is_parking_query_text(text: str) -> bool:
+    """Check if text is a parking query (question)."""
+    return any(re.search(p, text.lower()) for p in PARKING_QUERY_PATTERNS)
+
+
+def has_excluded_word(text: str) -> bool:
+    """Check if text contains query/exclusion words."""
+    lower = text.lower()
+    return any(excl in lower for excl in PARKING_EXCLUDE_WORDS)
+
 
 def detect_parking_update(message: str) -> Optional[str]:
-    """Detect if message is a parking location update."""
+    """Detect if message is a parking location UPDATE (not query)."""
+    msg_lower = message.lower().strip()
+    
+    if is_parking_query_text(message):
+        logger.info(f"[LLMChat] Parking intent detected: query (will NOT save)")
+        return None
+    
     for pattern in PARKING_UPDATE_PATTERNS:
-        match = re.search(pattern, message.lower())
+        match = re.search(pattern, msg_lower)
         if match:
             location = match.group(1).strip()
-            if location and len(location) < 20:
-                logger.info(f"[LLMChat] Parking update detected: {location}")
+            
+            if has_excluded_word(location):
+                logger.info(f"[LLMChat] Parking intent skipped: contains excluded word, location={location}")
+                return None
+            
+            if location and 1 <= len(location) <= 10:
+                logger.info(f"[LLMChat] Parking intent detected: update, location={location}")
                 return location
+    
     return None
 
 
 def detect_parking_query(message: str) -> bool:
-    """Detect if message is a query about parking location."""
-    return any(re.search(p, message.lower()) for p in PARKING_QUERY_PATTERNS)
+    """Detect if message is a parking location QUERY."""
+    return is_parking_query_text(message)
 
 
 def handle_parking_memory(line_user_id: str, user_message: str, user_id: str) -> Optional[str]:

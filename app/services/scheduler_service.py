@@ -268,14 +268,24 @@ class ProactiveScheduler:
             if not result.data:
                 return
             
+            sent_today = set()
+            sent_result = supabase.table("reminder_sent_logs").select("reminder_id").eq("sent_type", "due").execute()
+            for sr in (sent_result.data or []):
+                sent_today.add(sr.get("reminder_id"))
+            
             for reminder in result.data:
                 if not is_valid_reminder(reminder):
                     logger.warning(f"[Due Reminder] Skipping invalid reminder id={reminder.get('id')}")
                     continue
                 
+                reminder_id = reminder.get("id")
+                
+                if str(reminder_id) in sent_today:
+                    logger.info(f"[Due Reminder] Skipping already sent reminder id={reminder_id}")
+                    continue
+                
                 user_id = reminder.get("user_id")
                 message = reminder.get("message")
-                reminder_id = reminder.get("id")
                 
                 user_result = supabase.table("users").select("line_user_id, display_name").eq("id", user_id).execute()
                 if not user_result.data:

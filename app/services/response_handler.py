@@ -227,6 +227,15 @@ def get_response_for_action(
         
         # Save to DB
         try:
+            from app.repositories.reminder_repository import ReminderRepository
+            reminder_repo = ReminderRepository()
+            
+            existing = reminder_repo.find_duplicate(user_id, message, remind_at)
+            if existing:
+                logger.info(f"[ResponseHandler] Duplicate reminder detected, reusing existing: id={existing.get('id')}")
+                formatted_time = _format_thai_datetime(existing.get("remind_at", ""))
+                return f"ℹ️ มีการเตือน '{message}' อยู่แล้ว {formatted_time} ครับ", True
+            
             reminder_repo.create(user_id, message, remind_at)
             activity_repo.log_activity(user_id, "reminder_created", {"message": message, "remind_at": remind_at})
             logger.info(f"[ResponseHandler] ✅ Reminder SAVED to DB: message='{message}', remind_at={remind_at}")
