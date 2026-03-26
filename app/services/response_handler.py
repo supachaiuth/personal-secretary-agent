@@ -167,7 +167,7 @@ def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: 
     date_start = datetime.combine(agenda_date, datetime.min.time(), tzinfo=bangkok_tz)
     date_end = datetime.combine(agenda_date, datetime.max.time(), tzinfo=bangkok_tz)
     
-    logger.info(f"[Agenda] date_label={date_label}, date={agenda_date}, start={date_start.isoformat()}")
+    logger.info(f"[Agenda] date_label={date_label}, start={date_start.isoformat()}, end={date_end.isoformat()}, timezone=Asia/Bangkok")
     
     logger.info(f"[Agenda] reminders query start")
     rem_result = supabase.table("reminders").select("*").eq("user_id", user_id).eq("sent", False).execute()
@@ -182,7 +182,9 @@ def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: 
         if remind_at_str:
             try:
                 remind_dt = datetime.fromisoformat(remind_at_str.replace("Z", "+00:00")).astimezone(bangkok_tz)
-                if date_start.date() == remind_dt.date():
+                target_date = date_start.date()
+                remind_date = remind_dt.date()
+                if target_date == remind_date:
                     minutes = remind_dt.hour * 60 + remind_dt.minute
                     timed_items.append({
                         "minutes": minutes,
@@ -190,6 +192,7 @@ def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: 
                         "message": rem.get("message", ""),
                         "type": "reminder"
                     })
+                    logger.info(f"[Agenda] matched reminder: {remind_dt.date()} == {target_date}, time={remind_dt.strftime('%H:%M')}")
             except Exception as e:
                 logger.warning(f"[Agenda] reminder parse error: {e}")
     
@@ -203,13 +206,16 @@ def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: 
         if due_date_str:
             try:
                 due_dt = datetime.fromisoformat(due_date_str.replace("Z", "+00:00")).astimezone(bangkok_tz)
-                if date_start.date() == due_dt.date():
+                target_date = date_start.date()
+                due_date = due_dt.date()
+                if target_date == due_date:
                     timed_items.append({
                         "minutes": due_dt.hour * 60 + due_dt.minute if due_dt.hour else 1440,
                         "time_str": due_dt.strftime("%H:%M") if due_dt.hour else "กำหนด",
                         "message": task.get("title", ""),
                         "type": "task"
                     })
+                    logger.info(f"[Agenda] matched task: {due_dt.date()} == {target_date}, time={due_dt.strftime('%H:%M')}")
             except Exception as e:
                 logger.warning(f"[Agenda] task parse error: {e}")
     

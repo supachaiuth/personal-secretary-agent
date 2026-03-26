@@ -115,8 +115,9 @@ def handle_parking_memory(line_user_id: str, user_message: str, user_id: str) ->
         
         from app.agents.memory_manager import add_persistent_memory
         try:
-            add_persistent_memory(user_id, "parking", f"จอดรถที่ชั้น {normalized_location}")
+            add_persistent_memory(user_id, "parking", normalized_location)
             logger.info(f"[LLMChat] Parking DB save SUCCESS: user_id={user_id}, location={normalized_location}")
+            logger.info(f"[Parking] final response: โอเคครับ จอดที่ชั้น {normalized_location} นะครับ")
             return f"โอเคครับ จอดที่ชั้น {normalized_location} นะครับ"
         except Exception as e:
             logger.error(f"[LLMChat] Parking DB save FAILED: user_id={user_id}, error={e}")
@@ -128,8 +129,15 @@ def handle_parking_memory(line_user_id: str, user_message: str, user_id: str) ->
             memories = get_persistent_memories(user_id, limit=10)
             for mem in memories:
                 if mem.get("topic") == "parking":
-                    logger.info(f"[LLMChat] Parking DB read: user_id={user_id}, content={mem.get('content')}")
-                    return f"รถของคุณจอดไว้ที่ {mem.get('content', 'ไม่ทราบ')}"
+                    raw_content = mem.get("content", "")
+                    logger.info(f"[Parking] raw memory: {raw_content}")
+                    
+                    normalized_value = normalize_parking_location(raw_content)
+                    logger.info(f"[Parking] normalized value: {normalized_value}")
+                    
+                    response = f"รถของคุณจอดอยู่ที่ชั้น {normalized_value}"
+                    logger.info(f"[Parking] final response: {response}")
+                    return response
             
             logger.info(f"[LLMChat] Parking DB read no data: user_id={user_id}")
         except Exception as e:
@@ -146,10 +154,19 @@ def normalize_parking_location(location: str) -> str:
     
     loc = location.strip().upper()
     
-    loc = re.sub(r'^ชั้น\s*', '', loc)
+    patterns_to_remove = [
+        r'^จอดรถที่ชั้น\s*',
+        r'^จอดรถที่\s*',
+        r'^จอดรถ\s*',
+        r'^ชั้น\s*',
+        r'^FLOOR\s*',
+    ]
+    for pattern in patterns_to_remove:
+        loc = re.sub(pattern, '', loc, flags=re.IGNORECASE)
     
-    loc = re.sub(r'^FLOOR\s*', '', loc)
+    loc = loc.strip()
     
+    logger.info(f"[Parking] normalize_parking_location: input='{location}' -> output='{loc}'")
     return loc
 
 
