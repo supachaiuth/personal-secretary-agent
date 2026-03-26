@@ -145,11 +145,14 @@ def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: 
     if not user_id:
         return f"{user_name}ขอโทษครับ ไม่สามารถดูรายการได้ในตอนนี้"
     
-    from datetime import datetime, timedelta, timezone
-    from app.services.reminder_service import reminder_service
+    from datetime import timedelta, timezone
+    from app.services.supabase_service import get_supabase
     
+    supabase = get_supabase()
     bangkok_tz = timezone(timedelta(hours=7))
     now = datetime.now(bangkok_tz)
+    
+    logger.info(f"[Agenda] base_now={now.isoformat()}")
     
     if target_date == "tomorrow":
         agenda_date = (now + timedelta(days=1)).date()
@@ -166,8 +169,10 @@ def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: 
     
     logger.info(f"[Agenda] date_label={date_label}, date={agenda_date}, start={date_start.isoformat()}")
     
+    logger.info(f"[Agenda] reminders query start")
     rem_result = supabase.table("reminders").select("*").eq("user_id", user_id).eq("sent", False).execute()
     reminders_raw = rem_result.data or []
+    logger.info(f"[Agenda] reminders fetched: {len(reminders_raw)}")
     
     timed_items = []
     untimed_items = []
@@ -185,11 +190,13 @@ def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: 
                         "message": rem.get("message", ""),
                         "type": "reminder"
                     })
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[Agenda] reminder parse error: {e}")
     
+    logger.info(f"[Agenda] tasks query start")
     task_result = supabase.table("tasks").select("*").eq("user_id", user_id).in_("status", ["pending", "in_progress"]).order("created_at", desc=True).execute()
     tasks_raw = task_result.data or []
+    logger.info(f"[Agenda] tasks fetched: {len(tasks_raw)}")
     
     for task in tasks_raw:
         due_date_str = task.get("due_date", "")
@@ -203,12 +210,12 @@ def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: 
                         "message": task.get("title", ""),
                         "type": "task"
                     })
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning(f"[Agenda] task parse error: {e}")
     
     timed_items.sort(key=lambda x: x["minutes"])
     
-    logger.info(f"[Agenda] reminders_count={len(reminders_raw)}, tasks_count={len(tasks_raw)}, timed_items={len(timed_items)}, untimed_items={len(untimed_items)}")
+    logger.info(f"[Agenda] reminders_count={len(reminders_raw)}, tasks_count={len(tasks_raw)}, final_items_count={len(timed_items)}")
     
     if not timed_items and not untimed_items:
         return f"📅 {date_label} {user_name}ไม่มีรายการที่ต้องทำครับ ✅"
