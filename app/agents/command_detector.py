@@ -8,6 +8,90 @@ from typing import Optional, Dict, Any, Tuple
 
 logger = logging.getLogger(__name__)
 
+# ============================================================
+# PART 1: REMINDER → PANTRY MISROUTING FIX
+# Strong intent priority rule: reminder keywords FORCE create_reminder
+# ============================================================
+
+REMINDER_FORCE_KEYWORDS = [
+    "เตือน",
+    "แจ้งเตือน",
+    "อย่าลืม",
+    "เตือนฉัน",
+    "ช่วยเตือน",
+    "เตือนให้"
+]
+
+PANTRY_STRONG_KEYWORDS = [
+    "ซื้อ",
+    "ตู้เย็น",
+    "ของหมด",
+    "ของในตู้เย็น",
+    "วัตถุดิบ"
+]
+
+
+def _get_reminder_keywords_found(message: str) -> list[str]:
+    """Return list of matched reminder keywords."""
+    lower_msg = message.lower()
+    return [kw for kw in REMINDER_FORCE_KEYWORDS if kw in lower_msg]
+
+
+def _get_pantry_keywords_found(message: str) -> list[str]:
+    """Return list of matched pantry keywords."""
+    lower_msg = message.lower()
+    return [kw for kw in PANTRY_STRONG_KEYWORDS if kw in lower_msg]
+
+
+def _classify_intent_with_priority_rules(message: str) -> Optional[Dict[str, Any]]:
+    """
+    Rule-based intent classification BEFORE AI fallback.
+    
+    Priority:
+    1. If ANY reminder keyword found → FORCE create_reminder
+    2. If pantry keyword found AND no reminder keyword → add_pantry
+    3. Otherwise → continue to normal detection
+    """
+    msg = message.strip()
+    lower_msg = msg.lower()
+    
+    matched_reminder = _get_reminder_keywords_found(msg)
+    matched_pantry = _get_pantry_keywords_found(msg)
+    
+    logger.info(f"[IntentRouting] raw_input={msg[:50]}")
+    logger.info(f"[IntentRouting] matched_reminder_keywords={matched_reminder}")
+    logger.info(f"[IntentRouting] matched_pantry_keywords={matched_pantry}")
+    
+    if matched_reminder:
+        logger.info(f"[IntentRouting] final_intent=create_reminder reason=reminder_keyword_found")
+        result = _parse_reminder_from_text(msg)
+        return {
+            "action": "create_reminder",
+            "extracted_fields": {
+                "message": result.get("message", msg),
+                "date": result.get("date"),
+                "time": result.get("time"),
+                "has_time": result.get("has_time", False),
+                "remind_at": result.get("remind_at")
+            },
+            "needs_clarification": result.get("needs_clarification", False),
+            "source": "rule_priority"
+        }
+    
+    if matched_pantry and not matched_reminder:
+        logger.info(f"[IntentRouting] final_intent=add_pantry reason=pantry_keyword_no_reminder")
+        item = msg.replace("ซื้อ", "").replace("ตู้เย็น", "").replace("ของหมด", "").strip()
+        return {
+            "action": "add_pantry",
+            "extracted_fields": {"item_name": item or msg},
+            "needs_clarification": False,
+            "source": "rule_priority"
+        }
+    
+    logger.info(f"[IntentRouting] final_intent=None reason=fallthrough_to_normal_detection")
+    return None
+
+
 # Explicit command patterns - MUST be checked first
 # Format: (pattern, action, extraction_key)
 EXPLICIT_COMMANDS = [
@@ -66,6 +150,15 @@ def detect_command(user_message: str) -> Optional[Dict[str, Any]]:
     lower_message = message.lower()
     
     logger.info(f"[CommandDetector] Processing: {message}")
+    
+    # ============================================================
+    # PART 1 FIX: Rule-based priority BEFORE explicit patterns
+    # Check for reminder keywords FIRST to prevent pantry misrouting
+    # ============================================================
+    priority_result = _classify_intent_with_priority_rules(message)
+    if priority_result:
+        logger.info(f"[CommandDetector] Rule priority matched: {priority_result['action']}")
+        return priority_result
     
     # 1. Task: Add new task
     # Pattern: "เพิ่มงาน<text>" or "เพิ่มงาน <text>" (space optional)
@@ -236,23 +329,28 @@ def detect_command(user_message: str) -> Optional[Dict[str, Any]]:
     # 6. Pantry: Add item
     # Pattern: "ซื้อ<item>" or "เพิ่ม<item>" or "บันทึก<item>" (no space required)
     # ONLY match if it looks like a food/pantry item
+    # PART 1 FIX: Skip pantry detection if reminder keywords present
     pantry_keywords = ['ผัก', 'หมู', 'ไก่', 'ปลา', 'กุ้ง', 'ข้าว', 'น้ำ', 'ไข่', 'นม', 'ผลไม้', 'ส้ม', 'กล้วย', 'มะม่วง', 'อาหาร', 'วัตถุดิบ', 'ของ', 'กิน', 'ในตู้', 'ในครัว', 'ตู้เย็น', 'ครัว']
     
-    pantry_add_patterns = [
-        (r"^ซื้อ(.+)$", "item"),
-        (r"^บันทึก(.+)$", "item"),
-    ]
-    for pattern, key in pantry_add_patterns:
-        match = re.match(pattern, message)
-        if match:
-            item = match.group(1).strip()
-            logger.info(f"[CommandDetector] Detected: add_pantry, item={item}")
-            return {
-                "action": "add_pantry",
-                "extracted_fields": {"item_name": item},
-                "needs_clarification": False,
-                "source": "explicit_command"
-            }
+    # Guard: Don't route to pantry if reminder keyword present
+    if _get_reminder_keywords_found(message):
+        logger.info(f"[CommandDetector] Skipping pantry detection: reminder keyword present")
+    else:
+        pantry_add_patterns = [
+            (r"^ซื้อ(.+)$", "item"),
+            (r"^บันทึก(.+)$", "item"),
+        ]
+        for pattern, key in pantry_add_patterns:
+            match = re.match(pattern, message)
+            if match:
+                item = match.group(1).strip()
+                logger.info(f"[CommandDetector] Detected: add_pantry, item={item}")
+                return {
+                    "action": "add_pantry",
+                    "extracted_fields": {"item_name": item},
+                    "needs_clarification": False,
+                    "source": "explicit_command"
+                }
     
     # Special case: "เพิ่ม" for pantry - only if followed by food keyword
     match = re.match(r"^เพิ่ม(.+)$", message)

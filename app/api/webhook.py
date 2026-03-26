@@ -4,6 +4,8 @@ LINE Webhook handler with dual-mode architecture:
 - Assistant Chat Mode: natural conversation when no command detected
 """
 import logging
+import time
+import uuid
 from fastapi import APIRouter, Request, HTTPException, Header
 from app.services import line_service
 from app.services.response_handler import get_response_for_action, get_response_for_intent, FALLBACK_RESPONSE
@@ -20,6 +22,32 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 user_repo = UserRepository()
+
+# ============================================================
+# PART 2: WEBHOOK IDEMPOTENCY FIX
+# In-memory cache for processed webhook events
+# ============================================================
+
+_processed_events: dict[str, float] = {}
+DEDUP_TTL_SECONDS = 300  # 5 minutes TTL
+
+
+def _is_event_processed(event_id: str) -> bool:
+    """Check if event has already been processed."""
+    if event_id in _processed_events:
+        timestamp = _processed_events[event_id]
+        if time.time() - timestamp < DEDUP_TTL_SECONDS:
+            logger.info(f"[WebhookDedup] event_id={event_id} already_processed=True")
+            return True
+        else:
+            del _processed_events[event_id]
+    return False
+
+
+def _mark_event_processed(event_id: str):
+    """Mark event as processed."""
+    _processed_events[event_id] = time.time()
+    logger.info(f"[WebhookDedup] event_id={event_id} marked_processed=True")
 
 
 def get_or_create_user(line_user_id: str) -> dict:
@@ -241,6 +269,19 @@ async def webhook(
     
     for event in events:
         if event.get("type") == "message" and event.get("message", {}).get("type") == "text":
+            # ============================================================
+            # PART 2 FIX: Idempotency check - use event_id for deduplication
+            # ============================================================
+            event_id = event.get("eventId") or event.get("replyToken") or f"{event.get('source', {}).get('userId')}_{event.get('message', {}).get('id')}"
+            
+            logger.info(f"[WebhookFlow] start_processing event_id={event_id}")
+            
+            if _is_event_processed(event_id):
+                logger.info(f"[WebhookFlow] skipped_duplicate event_id={event_id}")
+                continue
+            
+            _mark_event_processed(event_id)
+            
             user_message = event["message"]["text"]
             reply_token = event["replyToken"]
             
@@ -335,9 +376,12 @@ async def webhook(
             if not response_text:
                 response_text = FALLBACK_RESPONSE
             
+            logger.info(f"[WebhookFlow] sending_reply event_id={event_id}")
+            
             success = line_service.reply_message(reply_token, response_text)
             
             if success:
+                logger.info(f"[WebhookFlow] reply_sent event_id={event_id}")
                 logger.info(f"[Webhook] Reply sent: {response_text[:50]}...")
             else:
                 logger.warning(f"[Webhook] Failed to send reply for: {user_message}")
