@@ -130,6 +130,93 @@ def _format_thai_datetime(iso_string: str) -> str:
         return iso_string
 
 
+def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: str = "tomorrow") -> str:
+    """Build agenda response for a specific date (tomorrow/today)."""
+    if not user_id:
+        return f"{user_name}ขอโทษครับ ไม่สามารถดูรายการได้ในตอนนี้"
+    
+    from datetime import datetime, timedelta, timezone
+    from app.services.reminder_service import reminder_service
+    
+    bangkok_tz = timezone(timedelta(hours=7))
+    now = datetime.now(bangkok_tz)
+    
+    if target_date == "tomorrow":
+        agenda_date = (now + timedelta(days=1)).date()
+        date_label = "พรุ่งนี้"
+    elif target_date == "today":
+        agenda_date = now.date()
+        date_label = "วันนี้"
+    else:
+        agenda_date = now.date()
+        date_label = "วันนี้"
+    
+    date_start = datetime.combine(agenda_date, datetime.min.time(), tzinfo=bangkok_tz)
+    date_end = datetime.combine(agenda_date, datetime.max.time(), tzinfo=bangkok_tz)
+    
+    logger.info(f"[Agenda] date_label={date_label}, date={agenda_date}, start={date_start.isoformat()}")
+    
+    rem_result = supabase.table("reminders").select("*").eq("user_id", user_id).eq("sent", False).execute()
+    reminders_raw = rem_result.data or []
+    
+    timed_items = []
+    untimed_items = []
+    
+    for rem in reminders_raw:
+        remind_at_str = rem.get("remind_at", "")
+        if remind_at_str:
+            try:
+                remind_dt = datetime.fromisoformat(remind_at_str.replace("Z", "+00:00")).astimezone(bangkok_tz)
+                if date_start.date() == remind_dt.date():
+                    minutes = remind_dt.hour * 60 + remind_dt.minute
+                    timed_items.append({
+                        "minutes": minutes,
+                        "time_str": remind_dt.strftime("%H:%M"),
+                        "message": rem.get("message", ""),
+                        "type": "reminder"
+                    })
+            except Exception:
+                pass
+    
+    task_result = supabase.table("tasks").select("*").eq("user_id", user_id).in_("status", ["pending", "in_progress"]).execute()
+    tasks_raw = task_result.data or []
+    
+    for task in tasks_raw:
+        due_date_str = task.get("due_date", "")
+        if due_date_str:
+            try:
+                due_dt = datetime.fromisoformat(due_date_str.replace("Z", "+00:00")).astimezone(bangkok_tz)
+                if date_start.date() == due_dt.date():
+                    timed_items.append({
+                        "minutes": due_dt.hour * 60 + due_dt.minute if due_dt.hour else 1440,
+                        "time_str": due_dt.strftime("%H:%M") if due_dt.hour else "กำหนด",
+                        "message": task.get("title", ""),
+                        "type": "task"
+                    })
+            except Exception:
+                pass
+    
+    timed_items.sort(key=lambda x: x["minutes"])
+    
+    logger.info(f"[Agenda] reminders_count={len(reminders_raw)}, tasks_count={len(tasks_raw)}, timed_items={len(timed_items)}, untimed_items={len(untimed_items)}")
+    
+    if not timed_items and not untimed_items:
+        return f"📅 {date_label} {user_name}ไม่มีรายการที่ต้องทำครับ ✅"
+    
+    lines = [f"📅 {date_label} {user_name}มี:"]
+    
+    for item in timed_items:
+        lines.append(f"  • {item['time_str']} {item['message']}")
+    
+    if untimed_items:
+        lines.append("")
+        lines.append("📝 อื่นๆ:")
+        for item in untimed_items:
+            lines.append(f"  • {item['message']}")
+    
+    return "\n".join(lines)
+
+
 def get_response_for_action(
     action: str,
     extracted_fields: Dict[str, Any],
@@ -167,6 +254,11 @@ def get_response_for_action(
     # ===== list_tasks =====
     if action == "list_tasks":
         return _build_task_list_response(user_id, user_name), True
+    
+    # ===== agenda_query =====
+    if action == "agenda_query":
+        target_date = extracted_fields.get("date", "tomorrow")
+        return _build_agenda_response(user_id, user_name, target_date), True
     
     # ===== add_pantry =====
     if action == "add_pantry":

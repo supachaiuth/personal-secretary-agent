@@ -116,6 +116,34 @@ def detect_command(user_message: str) -> Optional[Dict[str, Any]]:
                 "source": "explicit_command"
             }
     
+    # 2b. Agenda/Tomorrow queries - must check BEFORE reminder
+    if message.startswith("พรุ่งนี้") or message.startswith("วันพรุ่งนี้"):
+        date_val = "tomorrow"
+        if message.startswith("พรุ่งนี้"):
+            date_val = "tomorrow"
+        elif message.startswith("วันพรุ่งนี้"):
+            date_val = "tomorrow"
+        
+        if "วันนี้" in message:
+            date_val = "today"
+        
+        logger.info(f"[CommandDetector] Detected: agenda_query, date={date_val}")
+        return {
+            "action": "agenda_query",
+            "extracted_fields": {"date": date_val},
+            "needs_clarification": False,
+            "source": "explicit_command"
+        }
+    
+    if re.match(r"^วันนี้.*(ต้องทำ|มี)", message):
+        logger.info(f"[CommandDetector] Detected: agenda_query, date=today")
+        return {
+            "action": "agenda_query",
+            "extracted_fields": {"date": "today"},
+            "needs_clarification": False,
+            "source": "explicit_command"
+        }
+    
     # 3. Reminder: Create reminder (at beginning)
     # Pattern: "เตือน <message>" or "เตือนฉัน <message>" or "แจ้งเตือน <message>"
     reminder_match = re.match(r"^(เตือน|แจ้งเตือน)\s*(.*)$", message)
