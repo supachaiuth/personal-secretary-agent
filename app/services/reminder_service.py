@@ -257,6 +257,19 @@ class ReminderService:
         hour = None
         minute = 0
         
+        # NORMALIZE: Convert 18.00 -> 18:00, 18.00 น -> 18:00, 18.00 น. -> 18:00
+        message_normalized = re.sub(r'(\d{1,2})\.(\d{2})\s*น\b', r'\1:\2', message_lower)
+        message_normalized = re.sub(r'(\d{1,2})\.(\d{2})\s*น\.', r'\1:\2', message_normalized)
+        message_normalized = re.sub(r'(\d{1,2})\.(\d{2})\s*นาที', r'\1:\2', message_normalized)
+        message_for_time = re.sub(r'(\d{1,2})\.(\d{2})\s*น\b', r'\1:\2', message_for_time)
+        message_for_time = re.sub(r'(\d{1,2})\.(\d{2})\s*น\.', r'\1:\2', message_for_time)
+        message_for_time = re.sub(r'(\d{1,2})\.(\d{2})\s*นาที', r'\1:\2', message_for_time)
+        
+        if message_normalized != message_lower:
+            logger.info(f"[ReminderService] Normalized time: {message_lower} -> {message_normalized}")
+        
+        message_lower = message_normalized
+        
         # RULE 1: Check "บ่ายสอง/สาม/สี่/ห้า" FIRST (most specific Thai afternoon times)
         # Use original message_lower for Thai text detection (Thai numerals work better)
         if "บ่ายสอง" in message_lower or "บ่าย 2" in message_lower:

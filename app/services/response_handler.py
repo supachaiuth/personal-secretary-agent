@@ -200,6 +200,15 @@ def get_response_for_action(
         
         logger.info(f"[ResponseHandler] Reminder: message='{message}', has_time={has_time}, remind_at={remind_at}, user_id={user_id}")
         
+        if not message or len(message.strip()) < 3:
+            logger.warning(f"[ResponseHandler] Reminder message too short: '{message}'")
+            return f"รายละเอียดการเตือนสั้นเกินไป ขอรายละเอียดเพิ่มเติมได้ไหมครับ?", False
+        
+        forbidden_fragments = ["เยน", "เช้า", "บ่าย", "คืน", "ทุ่ม", "ตี", "น.", "โมง"]
+        if message.strip() in forbidden_fragments:
+            logger.warning(f"[ResponseHandler] Reminder is forbidden fragment: '{message}'")
+            return f"ขอรายละเอียดเพิ่มเติมได้ไหมครับ?", False
+        
         # Check if complete
         if not message:
             return f"ต้องการให้เตือนอะไรครับ?", False

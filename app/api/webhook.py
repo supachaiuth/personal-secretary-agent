@@ -68,36 +68,34 @@ def handle_pending_action(
     if pending_action == "create_reminder":
         from app.services.reminder_service import reminder_service
         
-        # Parse the NEW message
-        parsed = reminder_service.parse_reminder_message(user_message)
-        
-        # Get existing collected from session
         existing = session.get("collected_fields", {})
+        original_message = existing.get("message", "")
+        
+        logger.info(f"[Webhook] Original message from session: '{original_message}'")
+        
+        parsed = reminder_service.parse_reminder_message(user_message)
         
         logger.info(f"[Webhook] Parsed from new message: {parsed}")
         logger.info(f"[Webhook] Existing collected: {existing}")
         
-        # FIXED MERGE LOGIC:
-        # - If user provides NEW message content, use it
-        # - If user provides NEW time, use it
-        # - Otherwise keep existing values
+        has_existing_message = bool(original_message and len(original_message) >= 3)
+        has_new_message = bool(parsed.get("message", "").strip())
         
-        new_message = parsed.get("message", "").strip()
-        existing_message = existing.get("message", "")
+        logger.info(f"[Webhook] has_existing_message={has_existing_message}, has_new_message={has_new_message}")
         
-        # Use new message if provided, otherwise keep existing
-        if new_message and new_message != "ฉัน" and new_message != "พรุ่งนี้":
-            final_message = new_message
-        elif existing_message:
-            final_message = existing_message
+        if has_existing_message:
+            final_message = original_message
+            logger.info(f"[Webhook] Preserving original message: '{final_message}'")
+        elif has_new_message and parsed.get("message") not in ["ฉัน", "พรุ่งนี้"]:
+            final_message = parsed.get("message", "").strip()
+            logger.info(f"[Webhook] Using new message: '{final_message}'")
         else:
-            final_message = new_message or ""
+            final_message = ""
+            logger.info(f"[Webhook] No valid message, will need clarification")
         
-        # Use new time/date if provided
         final_time = parsed.get("time") or existing.get("time")
         final_date = parsed.get("date") or existing.get("date")
         
-        # If new message has time, use it (override existing)
         if parsed.get("time"):
             final_time = parsed.get("time")
         if parsed.get("date"):
@@ -105,7 +103,8 @@ def handle_pending_action(
         
         final_has_time = parsed.get("has_time", False) or existing.get("has_time", False) or final_time is not None
         
-        # Calculate remind_at if we have both date and time
+        logger.info(f"[Webhook] final_time={final_time}, final_date={final_date}, final_has_time={final_has_time}")
+        
         remind_at = None
         if final_date and final_time:
             remind_at = reminder_service.calculate_remind_at(final_date, final_time)

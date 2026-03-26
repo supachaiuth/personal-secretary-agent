@@ -1,11 +1,12 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from app.services.supabase_service import get_supabase_client
 
 router = APIRouter()
 
 
-@router.get("/health")
-async def health_check():
+@router.api_route("/health", methods=["GET", "HEAD"])
+async def health_check(response: Response):
+    response.headers["X-Health-Status"] = "ok"
     return {"status": "ok"}
 
 
