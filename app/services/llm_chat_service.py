@@ -3,6 +3,7 @@ LLM Chat Service for Assistant Chat Mode.
 Provides natural conversation when no command is detected.
 """
 import os
+import re
 import httpx
 import logging
 from typing import Optional, List, Dict, Any
@@ -17,6 +18,69 @@ _conversation_histories: Dict[str, List[Dict[str, str]]] = {}
 
 # Max turns to keep in history
 MAX_HISTORY_TURNS = 4
+
+
+PARKING_UPDATE_PATTERNS = [
+    r"จอดรถชั้น\s*(\S+)",
+    r"จอดรถ\s*ชั้น\s*(\S+)",
+    r"จอดรถ\s*(.+)$",
+    r"parking\s*(.+)$",
+    r"จอด\s*(.+)$",
+]
+
+PARKING_QUERY_PATTERNS = [
+    r"จอดรถไว้ตรงไหน",
+    r"รถจอดไว้ที่ไหน",
+    r"รถอยู่ไหน",
+    r"จอดรถที่ไหน",
+    r"where\s*parking",
+]
+
+
+def detect_parking_update(message: str) -> Optional[str]:
+    """Detect if message is a parking location update."""
+    for pattern in PARKING_UPDATE_PATTERNS:
+        match = re.search(pattern, message.lower())
+        if match:
+            location = match.group(1).strip()
+            if location and len(location) < 20:
+                logger.info(f"[LLMChat] Parking update detected: {location}")
+                return location
+    return None
+
+
+def detect_parking_query(message: str) -> bool:
+    """Detect if message is a query about parking location."""
+    return any(re.search(p, message.lower()) for p in PARKING_QUERY_PATTERNS)
+
+
+def handle_parking_memory(line_user_id: str, user_message: str, user_id: str) -> Optional[str]:
+    """Handle parking memory: save updates, answer queries from DB."""
+    update_location = detect_parking_update(user_message)
+    
+    if update_location:
+        from app.agents.memory_manager import add_persistent_memory
+        try:
+            add_persistent_memory(user_id, "parking", f"จอดรถที่ชั้น {update_location}")
+            logger.info(f"[LLMChat] Parking memory saved: user_id={user_id}, location={update_location}")
+        except Exception as e:
+            logger.error(f"[LLMChat] Failed to save parking memory: {e}")
+        return None
+    
+    if detect_parking_query(user_message):
+        from app.agents.memory_manager import get_persistent_memories
+        try:
+            memories = get_persistent_memories(user_id, limit=10)
+            for mem in memories:
+                if mem.get("topic") == "parking":
+                    logger.info(f"[LLMChat] Parking memory read from DB: {mem.get('content')}")
+                    return f"รถของคุณจอดไว้ที่ {mem.get('content', 'ไม่ทราบ')}"
+            
+            logger.info(f"[LLMChat] No parking memory in DB for user_id={user_id}")
+        except Exception as e:
+            logger.error(f"[LLMChat] Failed to read parking memory: {e}")
+    
+    return None
 
 
 def get_system_prompt() -> str:
@@ -105,6 +169,22 @@ def generate_chat_response(
     if not _settings.openai_api_key:
         logger.error("[LLMChat] No OpenAI API key configured")
         return "ขอโทษครับ ตอนนี้ระบบ AI ยังไม่พร้อม ลองใหม่อีกครั้งนะครับ"
+    
+    from app.repositories.user_repository import UserRepository
+    user_repo = UserRepository()
+    user_result = user_repo.get_by_line_user_id(line_user_id)
+    user_id_str = None
+    if user_result and user_result.data and len(user_result.data) > 0:
+        user_id = user_result.data[0].get("id")
+        if user_id:
+            user_id_str = str(user_id)
+    
+    if user_id_str:
+        parking_response = handle_parking_memory(line_user_id, user_message, user_id_str)
+        if parking_response:
+            add_to_history(line_user_id, "user", user_message)
+            add_to_history(line_user_id, "assistant", parking_response)
+            return parking_response
     
     # Build messages
     messages = build_messages(user_message, line_user_id, user_name, user_role)
