@@ -351,7 +351,9 @@ class ProactiveScheduler:
         
         memories = self._get_smart_memories(user_id)
         
-        message = self._format_morning_summary(display_name, pending_tasks, today_reminders, memories)
+        parking_mem = self.get_latest_parking_memory(user_id)
+        
+        message = self._format_morning_summary(display_name, pending_tasks, today_reminders, memories, parking_mem)
         
         if push_message(line_user_id, message):
             supabase.table("summary_logs").insert({
@@ -389,7 +391,9 @@ class ProactiveScheduler:
         upcoming = deduplicate_reminders(filter_valid_reminders(upcoming))
         logger.info(f"[Daily Summary] Valid upcoming reminders for user {user_id}: {len(upcoming)}")
         
-        message = self._format_daily_summary(display_name, tasks_created, reminders_created, pantry_updates, upcoming)
+        today_parking = self.get_today_parking_memory(user_id)
+        
+        message = self._format_daily_summary(display_name, tasks_created, reminders_created, pantry_updates, upcoming, today_parking)
         
         if push_message(line_user_id, message):
             supabase.table("summary_logs").insert({
@@ -496,7 +500,33 @@ class ProactiveScheduler:
         
         return list(topics_seen.values())
     
-    def _format_morning_summary(self, display_name: str, tasks: List[Dict], reminders: List[Dict], memories: List[Dict]) -> str:
+    def get_latest_parking_memory(self, user_id: str) -> Optional[Dict]:
+        """Get latest parking memory for a user."""
+        result = supabase.table("user_memories").select("*").eq("user_id", user_id).eq("topic", "parking").order("updated_at", desc=True).limit(1).execute()
+        
+        if result.data and len(result.data) > 0:
+            mem = result.data[0]
+            logger.info(f"[SUMMARY] parking_memory_found user_id={user_id} location={mem.get('content')}")
+            return mem
+        
+        logger.info(f"[SUMMARY] parking_memory_skipped user_id={user_id} reason=no_data")
+        return None
+    
+    def get_today_parking_memory(self, user_id: str) -> Optional[Dict]:
+        """Get today's parking memory for a user (updated today in Bangkok time)."""
+        today_start = datetime.now(BANGKOK_TZ).replace(hour=0, minute=0, second=0, microsecond=0)
+        
+        result = supabase.table("user_memories").select("*").eq("user_id", user_id).eq("topic", "parking").gte("updated_at", today_start.isoformat()).order("updated_at", desc=True).limit(1).execute()
+        
+        if result.data and len(result.data) > 0:
+            mem = result.data[0]
+            logger.info(f"[SUMMARY] parking_memory_found user_id={user_id} location={mem.get('content')} type=today")
+            return mem
+        
+        logger.info(f"[SUMMARY] parking_memory_skipped user_id={user_id} reason=no_data_today")
+        return None
+    
+    def _format_morning_summary(self, display_name: str, tasks: List[Dict], reminders: List[Dict], memories: List[Dict], parking_mem: Optional[Dict] = None) -> str:
         """Format morning summary message."""
         lines = ["🌅 สรุปเช้านี้", ""]
         
@@ -523,6 +553,11 @@ class ProactiveScheduler:
                     lines.append(f"  • {content} ({diff})")
                 else:
                     lines.append(f"  • {content}")
+        
+        if parking_mem:
+            lines.append("")
+            lines.append("🚗 สิ่งที่ควรจำ:")
+            lines.append(f"  • คุณจอดรถไว้ที่ {parking_mem.get('content', 'ไม่ทราบ')}")
         
         lines.append("")
         lines.append("สวัสดีครับ ☀️")
@@ -559,7 +594,7 @@ class ProactiveScheduler:
         
         return "\n".join(lines)
     
-    def _format_daily_summary(self, display_name: str, tasks_created: int, reminders_created: int, pantry_updates: int, upcoming: List[Dict]) -> str:
+    def _format_daily_summary(self, display_name: str, tasks_created: int, reminders_created: int, pantry_updates: int, upcoming: List[Dict], today_parking: Optional[Dict] = None) -> str:
         """Format daily summary message."""
         lines = ["🌙 สรุปประจำวัน", ""]
         
@@ -577,6 +612,11 @@ class ProactiveScheduler:
                     dt = datetime.fromisoformat(remind_at.replace("Z", "+00:00")).astimezone(BANGKOK_TZ)
                     date_str = dt.strftime("%d/%m %H:%M")
                     lines.append(f"  • {date_str} - {u.get('message', '')}")
+        
+        if today_parking:
+            lines.append("")
+            lines.append("🚗 อัปเดตที่ควรจำ:")
+            lines.append(f"  • วันนี้คุณจอดรถไว้ที่ {today_parking.get('content', 'ไม่ทราบ')}")
         
         lines.append("")
         lines.append("รับทราบครับ ✅")
