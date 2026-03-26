@@ -24,10 +24,21 @@ PARKING_UPDATE_PATTERNS = [
     r"จอดรถชั้น\s*([0-9A-Za-zก-๙]+)",
     r"จอดรถ\s*ชั้น\s*([0-9A-Za-zก-๙]+)",
     r"รถอยู่ชั้น\s*([0-9A-Za-zก-๙]+)",
+    r"จอดรถไว้\s*ชั้น\s*([0-9A-Za-zก-๙]+)",
     r"จอดรถไว้\s*([0-9A-Za-zก-๙]+)",
+    r"จอดรถ\s*([0-9A-Za-zก-๙]{1,5})$",
     r"จอด\s*ชั้น\s*([0-9A-Za-zก-๙]+)",
     r"จอด\s*([A-Za-z0-9ก-๙]{1,5})$",
     r"parking\s*([A-Za-z0-9ก-๙]{1,5})$",
+    r"ผมจอดรถชั้น\s*([0-9A-Za-zก-๙]+)",
+    r"ผมจอดรถ\s*ชั้น\s*([0-9A-Za-zก-๙]+)",
+    r"ผมจอดรถ\s*([A-Za-z0-9ก-๙]{1,5})$",
+    r"วันนี้จอดรถชั้น\s*([0-9A-Za-zก-๙]+)",
+    r"วันนี้จอดรถ\s*ชั้น\s*([0-9A-Za-zก-๙]+)",
+    r"วันนี้จอดรถ\s*([A-Za-z0-9ก-๙]{1,5})$",
+    r"วันนี้ผมจอดรถชั้น\s*([0-9A-Za-zก-๙]+)",
+    r"วันนี้ผมจอดรถ\s*ชั้น\s*([0-9A-Za-zก-๙]+)",
+    r"วันนี้ผมจอดรถ\s*([A-Za-z0-9ก-๙]{1,5})$",
 ]
 
 PARKING_QUERY_PATTERNS = [
@@ -92,16 +103,24 @@ def detect_parking_query(message: str) -> bool:
 
 def handle_parking_memory(line_user_id: str, user_message: str, user_id: str) -> Optional[str]:
     """Handle parking memory: save updates, answer queries from DB."""
+    msg_lower = user_message.lower().strip()
+    
     update_location = detect_parking_update(user_message)
     
+    logger.info(f"[LLMChat] Parking handle: user_id={user_id}, message='{msg_lower[:30]}', update_location={update_location}")
+    
     if update_location:
+        normalized_location = normalize_parking_location(update_location)
+        logger.info(f"[LLMChat] Parking normalized: '{update_location}' -> '{normalized_location}'")
+        
         from app.agents.memory_manager import add_persistent_memory
         try:
-            add_persistent_memory(user_id, "parking", f"จอดรถที่ชั้น {update_location}")
-            logger.info(f"[LLMChat] Parking memory saved: user_id={user_id}, location={update_location}")
+            add_persistent_memory(user_id, "parking", f"จอดรถที่ชั้น {normalized_location}")
+            logger.info(f"[LLMChat] Parking DB save SUCCESS: user_id={user_id}, location={normalized_location}")
+            return f"โอเคครับ จอดที่ชั้น {normalized_location} นะครับ"
         except Exception as e:
-            logger.error(f"[LLMChat] Failed to save parking memory: {e}")
-        return None
+            logger.error(f"[LLMChat] Parking DB save FAILED: user_id={user_id}, error={e}")
+            return None
     
     if detect_parking_query(user_message):
         from app.agents.memory_manager import get_persistent_memories
@@ -109,14 +128,29 @@ def handle_parking_memory(line_user_id: str, user_message: str, user_id: str) ->
             memories = get_persistent_memories(user_id, limit=10)
             for mem in memories:
                 if mem.get("topic") == "parking":
-                    logger.info(f"[LLMChat] Parking memory read from DB: {mem.get('content')}")
+                    logger.info(f"[LLMChat] Parking DB read: user_id={user_id}, content={mem.get('content')}")
                     return f"รถของคุณจอดไว้ที่ {mem.get('content', 'ไม่ทราบ')}"
             
-            logger.info(f"[LLMChat] No parking memory in DB for user_id={user_id}")
+            logger.info(f"[LLMChat] Parking DB read no data: user_id={user_id}")
         except Exception as e:
-            logger.error(f"[LLMChat] Failed to read parking memory: {e}")
+            logger.error(f"[LLMChat] Parking DB read ERROR: {e}")
     
+    logger.info(f"[LLMChat] Parking: no update/query detected, falling through")
     return None
+
+
+def normalize_parking_location(location: str) -> str:
+    """Normalize parking location to consistent format."""
+    if not location:
+        return location
+    
+    loc = location.strip().upper()
+    
+    loc = re.sub(r'^ชั้น\s*', '', loc)
+    
+    loc = re.sub(r'^FLOOR\s*', '', loc)
+    
+    return loc
 
 
 def get_system_prompt() -> str:
