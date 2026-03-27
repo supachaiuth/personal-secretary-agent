@@ -65,6 +65,106 @@ LIST_TASKS_PATTERNS = [
     r"^ดูงาน$",
 ]
 
+# ============================================================
+# PARKING QUERY DETECTION
+# Keyword-based detection for parking location queries
+# ============================================================
+
+CAR_KEYWORDS = ["รถ", "จอดรถ"]
+
+# FIXED: Remove standalone "ไหน" which caused false positives
+# Only strict location keywords that imply "where is..."
+LOCATION_KEYWORDS = [
+    "ที่ไหน",
+    "อยู่ไหน",
+    "ตรงไหน",
+    "ชั้นไหน",
+    "ชั้นอะไร",
+    "โซนไหน",
+    "แถวไหน",
+    "จุดไหน",
+    "บริเวณไหน",
+    "ฝั่งไหน"
+]
+
+# Negative patterns that should NOT be considered as location queries
+INVALID_LOCATION_PATTERNS = [
+    "อันไหน",
+    "แบบไหน",
+    "คันไหน",
+    "อะไรดี",
+    "อะไรเหมาะ",
+    "อันไหนดี",
+    "อันไหนถูก"
+]
+
+CASUAL_PARTICLES = ["นะ", "ล่ะ", "วะ", "ครับ", "ค่ะ", "พี่", "น้อง", "จ๊ะ"]
+
+
+def _normalize_parking_query(text: str) -> str:
+    """
+    Normalize parking query text:
+    - lowercase
+    - strip spaces
+    - remove punctuation (?, !, ., ,)
+    - remove trailing casual particles ONLY (not mid-word)
+    """
+    normalized = text.lower().strip()
+    
+    for p in ["?", "!", ".", ",", "ๆ", "ฯ"]:
+        normalized = normalized.replace(p, "")
+    
+    for particle in CASUAL_PARTICLES:
+        if normalized.endswith(particle):
+            normalized = normalized[:-len(particle)].strip()
+    
+    normalized = re.sub(r"\s+", " ", normalized)
+    
+    logger.info(f"[ParkingIntent] normalized={normalized}")
+    return normalized
+
+
+def is_parking_query(text: str) -> bool:
+    """
+    Detect if text is a parking query.
+    
+    Rules:
+    - MUST contain >= 1 CAR_KEYWORD
+    - AND >= 1 LOCATION_KEYWORD (from strict list only)
+    - MUST NOT contain invalid patterns (อันไหน, แบบไหน, etc.)
+    
+    Returns True only if all conditions satisfied.
+    """
+    if not text or len(text.strip()) < 3:
+        logger.info(f"[ParkingIntent] final_match=False reason=too_short")
+        return False
+    
+    normalized = _normalize_parking_query(text)
+    
+    matched_car = [k for k in CAR_KEYWORDS if k in normalized]
+    matched_location = [k for k in LOCATION_KEYWORDS if k in normalized]
+    
+    has_car = len(matched_car) > 0
+    has_location = len(matched_location) > 0
+    
+    invalid_patterns = [p for p in INVALID_LOCATION_PATTERNS if p in normalized]
+    has_invalid = len(invalid_patterns) > 0
+    
+    logger.info(f"[ParkingIntent] raw_input={text[:50]}")
+    logger.info(f"[ParkingIntent] normalized={normalized}")
+    logger.info(f"[ParkingIntent] matched_car_keywords={matched_car}")
+    logger.info(f"[ParkingIntent] matched_location_keywords={matched_location}")
+    logger.info(f"[ParkingIntent] invalid_patterns={invalid_patterns}")
+    
+    if has_invalid:
+        logger.info(f"[ParkingIntent] final_match=False reason=invalid_pattern_detected")
+        return False
+    
+    final_match = has_car and has_location
+    logger.info(f"[ParkingIntent] final_match={final_match}")
+    
+    return final_match
+
 # HARDENING: Ambiguous keywords that need clarification when combined with date
 AMBIGUOUS_WITH_DATE_KEYWORDS = [
     "ซื้อ",  # "ซื้อไข่พรุ่งนี้" - could be pantry or reminder intent
@@ -165,6 +265,16 @@ def _classify_intent_with_priority_v2(message: str) -> Optional[Dict[str, Any]]:
         logger.info(f"[IntentV2] final_intent=list_tasks reason=list_tasks_pattern_matched")
         return {
             "action": "list_tasks",
+            "extracted_fields": {},
+            "needs_clarification": False,
+            "source": "intent_v2"
+        }
+    
+    # Priority 2: Parking Query Detection
+    if is_parking_query(msg):
+        logger.info(f"[IntentV2] final_intent=parking_query reason=keyword_matched")
+        return {
+            "action": "parking_query",
             "extracted_fields": {},
             "needs_clarification": False,
             "source": "intent_v2"

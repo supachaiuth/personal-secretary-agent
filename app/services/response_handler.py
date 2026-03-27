@@ -137,6 +137,64 @@ def normalize_output_v2(output: str, output_type: str = "reminder") -> str:
     return output
 
 
+def _handle_parking_query(user_id: Optional[str], user_name: str) -> str:
+    """
+    Handle parking query intent.
+    
+    Returns parking location with freshness info:
+    - days_diff <= 3: "คุณจอดรถไว้ที่ ชั้น {location}"
+    - days_diff > 3: "คุณจอดรถไว้ที่ ชั้น {location} (บันทึกล่าสุดเมื่อ {days_diff} วันที่แล้ว)"
+    - no data: "ยังไม่มีข้อมูลที่จอดรถครับ"
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    
+    BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
+    
+    if not user_id:
+        logger.info(f"[ParkingQuery] response_mode=no_user")
+        return f"{user_name}ยังไม่มีข้อมูลที่จอดรถครับ"
+    
+    try:
+        result = supabase.table("user_memories").select("*").eq("user_id", user_id).eq("topic", "parking").order("updated_at", desc=True).limit(1).execute()
+        
+        if not result.data or len(result.data) == 0:
+            logger.info(f"[ParkingQuery] response_mode=no_data")
+            return f"{user_name}ยังไม่มีข้อมูลที่จอดรถครับ"
+        
+        parking = result.data[0]
+        location = parking.get("content", "")
+        updated_at = parking.get("updated_at", "")
+        
+        if not location:
+            logger.info(f"[ParkingQuery] response_mode=empty_location")
+            return f"{user_name}ยังไม่มีข้อมูลที่จอดรถครับ"
+        
+        try:
+            updated_dt = datetime.fromisoformat(updated_at.replace("Z", "+00:00")).astimezone(BANGKOK_TZ)
+            current_date = datetime.now(BANGKOK_TZ).date()
+            parking_date = updated_dt.date()
+            days_diff = (current_date - parking_date).days
+            
+            logger.info(f"[ParkingQuery] location={location}, updated_at={updated_at}, days_diff={days_diff}")
+            
+            if days_diff <= 3:
+                response = f"{user_name}คุณจอดรถไว้ที่ {location}"
+                logger.info(f"[ParkingQuery] response_mode=fresh")
+                return response
+            else:
+                response = f"{user_name}คุณจอดรถไว้ที่ {location} (บันทึกล่าสุดเมื่อ {days_diff} วันที่แล้ว)"
+                logger.info(f"[ParkingQuery] response_mode=stale")
+                return response
+        except Exception as e:
+            logger.warning(f"[ParkingQuery] date_parse_error={e}")
+            return f"{user_name}คุณจอดรถไว้ที่ {location}"
+    
+    except Exception as e:
+        logger.error(f"[ParkingQuery] error={e}")
+        return f"{user_name}ยังไม่มีข้อมูลที่จอดรถครับ"
+
+
 def get_user_display_name(line_user_id: str) -> str:
     """Get user's display name from LINE or DB."""
     try:
@@ -361,6 +419,10 @@ def get_response_for_action(
     if action == "agenda_query":
         target_date = extracted_fields.get("date", "tomorrow")
         return _build_agenda_response(user_id, user_name, target_date), True
+    
+    # ===== parking_query =====
+    if action == "parking_query":
+        return _handle_parking_query(user_id, user_name), True
     
     # ===== add_pantry =====
     if action == "add_pantry":

@@ -526,7 +526,7 @@ class ProactiveScheduler:
         upcoming = deduplicate_reminders(filter_valid_reminders(upcoming))
         logger.info(f"[Daily Summary] Valid upcoming reminders for user {user_id}: {len(upcoming)}")
         
-        today_parking = self.get_today_parking_memory(user_id)
+        today_parking = self.get_latest_parking_memory(user_id)
         
         message = self._format_daily_summary(display_name, tasks_created, reminders_created, pantry_updates, upcoming, today_parking, task_items, reminder_items, pantry_items)
         
@@ -645,6 +645,18 @@ class ProactiveScheduler:
             return mem
         
         logger.info(f"[SUMMARY] parking_memory_skipped user_id={user_id} reason=no_data")
+        return None
+    
+    def get_latest_parking_memory(self, user_id: str) -> Optional[Dict]:
+        """Get latest parking memory for a user (regardless of when updated)."""
+        result = supabase.table("user_memories").select("*").eq("user_id", user_id).eq("topic", "parking").order("updated_at", desc=True).limit(1).execute()
+        
+        if result.data and len(result.data) > 0:
+            mem = result.data[0]
+            logger.info(f"[SUMMARY] parking_memory_found user_id={user_id} location={mem.get('content')} updated_at={mem.get('updated_at')}")
+            return mem
+        
+        logger.info(f"[SUMMARY] parking_memory_not_found user_id={user_id} reason=no_data")
         return None
     
     def get_today_parking_memory(self, user_id: str) -> Optional[Dict]:
@@ -797,14 +809,68 @@ class ProactiveScheduler:
                     date_str = dt.strftime("%d/%m %H:%M")
                     lines.append(f"  • {date_str} - {u.get('message', '')}")
         
-        if today_parking:
+        parking_message = self._format_parking_message(today_parking)
+        if parking_message:
             lines.append("")
             lines.append("🚗 อัปเดตที่ควรจำ:")
-            lines.append(f"  • วันนี้คุณจอดรถไว้ที่ {today_parking.get('content', 'ไม่ทราบ')}")
+            lines.append(f"  • {parking_message}")
         
         logger.info(f"[OutputV2] final_render=summary_without_filler")
         
         return "\n".join(lines)
+    
+    def _format_parking_message(self, parking_data: Optional[Dict]) -> Optional[str]:
+        """
+        Format parking message based on freshness.
+        
+        Rules:
+        - days_diff >= 4: DO NOT show (return None)
+        - days_diff <= 1: "คุณจอดรถไว้ที่ ชั้น {location}"
+        - days_diff == 2 or 3: "จอดรถที่ชั้น {location} (เมื่อ {days_diff} วันที่แล้ว)"
+        - no data: return None
+        """
+        if not parking_data:
+            logger.info(f"[ParkingSummary] show_parking=False reason=no_parking_data")
+            return None
+        
+        content = parking_data.get("content", "")
+        updated_at = parking_data.get("updated_at", "")
+        
+        if not content or not updated_at:
+            logger.info(f"[ParkingSummary] show_parking=False reason=empty_data")
+            return None
+        
+        try:
+            updated_dt = datetime.fromisoformat(updated_at.replace("Z", "+00:00")).astimezone(BANGKOK_TZ)
+            current_date = datetime.now(BANGKOK_TZ).date()
+            parking_date = updated_dt.date()
+            days_diff = (current_date - parking_date).days
+            
+            logger.info(f"[ParkingSummary] parking_updated_at={updated_at}")
+            logger.info(f"[ParkingSummary] current_date={current_date.isoformat()}")
+            logger.info(f"[ParkingSummary] days_diff={days_diff}")
+            
+            if days_diff >= 4:
+                logger.info(f"[ParkingSummary] show_parking=False reason=days_diff>=4")
+                return None
+            
+            location = content.strip()
+            
+            if days_diff <= 1:
+                message = f"คุณจอดรถไว้ที่ {location}"
+                logger.info(f"[ParkingSummary] show_parking=True format=normal")
+                return message
+            elif days_diff == 2 or days_diff == 3:
+                message = f"จอดรถที่{location} (เมื่อ {days_diff} วันที่แล้ว)"
+                logger.info(f"[ParkingSummary] show_parking=True format=with_days_diff")
+                return message
+            else:
+                logger.info(f"[ParkingSummary] show_parking=False reason=unexpected_days_diff")
+                return None
+                
+        except Exception as e:
+            logger.warning(f"[ParkingSummary] error={e}, show_parking=False")
+            return None
     
     def _get_time_diff(self, updated_at: str) -> str:
         """Get human-readable time difference."""
