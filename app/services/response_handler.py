@@ -4,6 +4,7 @@ Supports both legacy intent-based and new action-based flows.
 """
 from typing import Optional, Dict, Any
 from datetime import datetime
+import re
 from app.repositories.task_repository import TaskRepository
 from app.repositories.pantry_repository import PantryRepository
 from app.repositories.reminder_repository import ReminderRepository
@@ -56,6 +57,84 @@ INTENT_RESPONSES = {
 
 
 FALLBACK_RESPONSE = "ขอโทษนะครับ ผมไม่เข้าใจ ลองบอกใหม่ได้ไหมครับ? เช่น ช่วยเตือนงาน, ดูตารางประชุม, ซื้อของ"
+
+
+# PART 5: Output Consistency - normalize output formats
+OUTPUT_FORBIDDEN_WORDS = [
+    "รับทราบครับ", "รับทราบค่ะ", "เตือน", "จำไว้นะ",
+    "จดจ่อ", "จำไว้", "บันทึกไว้"
+]
+
+OUTPUT_FORBIDDEN_PATTERNS = [
+    r"^\s*เตือน\s+",  # Starts with เตือน
+    r"\s+เตือน\s*$",  # Ends with เตือน
+    r"^รับทราบ",  # Starts with รับทราบ
+    r"ขอบคุณที่แจ้ง",  # Thanks for notifying
+    r"ได้\s+เลย\s*$",  # Ends with "ได้เลย"
+]
+
+
+def normalize_output_v2(output: str, output_type: str = "reminder") -> str:
+    """
+    Normalize output to enforce consistent format.
+    
+    Types:
+    - reminder: "08:00 ไปหาหมอ" - NOT "08:00 เตือน" or duplicated
+    - task: "07:00 - คืนคอม lean consult"
+    - agenda: NO filler, clean bullet list
+    - pantry: "รถของคุณจอดอยู่ที่ชั้น 5B"
+    """
+    if not output:
+        return output
+    
+    logger.info(f"[OutputV2] input_type={output_type}, raw='{output[:50]}'")
+    
+    # Check for forbidden words
+    for word in OUTPUT_FORBIDDEN_WORDS:
+        if word in output:
+            logger.warning(f"[OutputV2] removing forbidden word: {word}")
+            output = output.replace(word, "")
+    
+    # Check for forbidden patterns
+    for pattern in OUTPUT_FORBIDDEN_PATTERNS:
+        import re
+        output = re.sub(pattern, "", output, flags=re.IGNORECASE)
+    
+    # Type-specific normalization
+    if output_type == "reminder":
+        # Remove duplicate "เตือน" if appears multiple times
+        output = re.sub(r"เตือน\s+เตือน", "เตือน", output)
+        output = re.sub(r"เตือน\s+", "", output)
+        output = output.strip()
+        
+    elif output_type == "task":
+        # Ensure format is "HH:MM - title" or just "title"
+        output = output.strip()
+        
+    elif output_type == "agenda":
+        # Remove any filler text like "รับทราบครับ" or "ขอรายงาน"
+        filler_phrases = ["รับทราบครับ", "รับทราบค่ะ", "ขอรายงาน", "นี่คือรายการ"]
+        for phrase in filler_phrases:
+            if output.startswith(phrase):
+                output = output[len(phrase):].strip()
+        
+        # Ensure starts with bullet or time format
+        lines = output.split("\n")
+        cleaned_lines = []
+        for line in lines:
+            line = line.strip()
+            if line and not line.startswith("•") and not re.match(r"\d{2}:\d{2}", line):
+                line = f"• {line}"
+            if line:
+                cleaned_lines.append(line)
+        output = "\n".join(cleaned_lines)
+        
+    # Clean up extra whitespace
+    output = re.sub(r"\n\s*\n", "\n", output)
+    output = output.strip()
+    
+    logger.info(f"[OutputV2] normalized='{output[:50]}'")
+    return output
 
 
 def get_user_display_name(line_user_id: str) -> str:
@@ -305,9 +384,21 @@ def get_response_for_action(
     if action == "list_pantry":
         return _build_pantry_list_response(user_id, user_name), True
     
+    # ===== clarify_intent (hardening for ambiguous inputs) =====
+    if action == "clarify_intent":
+        question = extracted_fields.get("clarification_question", "ขอความชัดเจนได้ไหมครับ?")
+        logger.info(f"[Hardening] clarification_state=ambiguous_intent question={question}")
+        return question, False
+    
     # ===== create_reminder =====
     if action == "create_reminder":
         from app.services.reminder_service import is_valid_reminder
+        
+        # CRITICAL: Check for validation error from parser
+        validation_error = extracted_fields.get("validation_error")
+        if validation_error:
+            logger.warning(f"[Hardening] db_write_blocked reason=validation_error_{validation_error}")
+            return f"❌ เวลาไม่ถูกต้อง กรุณาระบุเวลาใหม่ครับ", False
         
         # CRITICAL: Normalize message to string
         raw_message = extracted_fields.get("message")
@@ -326,21 +417,29 @@ def get_response_for_action(
         
         logger.info(f"[ResponseHandler] Reminder: message='{message}', has_time={has_time}, remind_at={remind_at}, user_id={user_id}")
         
+        # ============================================================
+        # PART 6: Safety Guard Layer - validate ALL conditions before DB write
+        # Check 1: validation_result == valid
+        # Check 2: NOT ambiguous (needs_clarification should be False)
+        # Check 3: NOT partial (message must be complete)
+        # Check 4: NOT forbidden fragments
+        # Check 5: has_time and remind_at must exist
+        # ============================================================
+        
         if not message or len(message.strip()) < 3:
-            logger.warning(f"[ResponseHandler] Reminder message too short: '{message}'")
+            logger.warning(f"[HardeningV2] db_write_blocked reason=partial_message")
             return f"รายละเอียดการเตือนสั้นเกินไป ขอรายละเอียดเพิ่มเติมได้ไหมครับ?", False
         
         forbidden_fragments = ["เยน", "เช้า", "บ่าย", "คืน", "ทุ่ม", "ตี", "น.", "โมง"]
         if message.strip() in forbidden_fragments:
-            logger.warning(f"[ResponseHandler] Reminder is forbidden fragment: '{message}'")
+            logger.warning(f"[HardeningV2] db_write_blocked reason=forbidden_fragment")
             return f"ขอรายละเอียดเพิ่มเติมได้ไหมครับ?", False
         
-        # Check if complete
-        if not message:
-            return f"ต้องการให้เตือนอะไรครับ?", False
-        
         if not has_time or not remind_at:
+            logger.warning(f"[HardeningV2] db_write_blocked reason=missing_time")
             return f"ต้องการให้เตือนกี่โมงครับ?", False
+        
+        logger.info(f"[HardeningV2] safety_guard_passed user_id={user_id}")
         
         # Normalize the reminder message before saving
         from app.services.reminder_service import reminder_service
@@ -376,6 +475,9 @@ def get_response_for_action(
             from app.repositories.reminder_repository import ReminderRepository
             reminder_repo = ReminderRepository()
             
+            # HARDENING: Add debug logging for DB write
+            logger.info(f"[Hardening] db_write_attempt user_id={user_id} message={message[:30]}")
+            
             existing = reminder_repo.find_duplicate(user_id, message, remind_at)
             if existing:
                 logger.info(f"[ResponseHandler] Duplicate reminder detected, reusing existing: id={existing.get('id')}")
@@ -384,7 +486,9 @@ def get_response_for_action(
             
             reminder_repo.create(user_id, message, remind_at)
             activity_repo.log_activity(user_id, "reminder_created", {"message": message, "remind_at": remind_at})
-            logger.info(f"[ResponseHandler] ✅ Reminder SAVED to DB: message='{message}', remind_at={remind_at}")
+            
+            # HARDENING: Verify write succeeded
+            logger.info(f"[Hardening] db_write_success user_id={user_id} message={message[:30]}")
             
             formatted_time = _format_thai_datetime(remind_at)
             return f"✅ ตั้งเตือน '{message}' {formatted_time} เรียบร้อยครับ", True

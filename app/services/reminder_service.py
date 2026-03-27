@@ -311,40 +311,59 @@ class ReminderService:
                 logger.info(f"[ReminderService] Detected X โมงเช้า: {time}")
             
             # Check "X โมงเย็น" (e.g., "6 โมงเย็น" = 18:00, "7 โมงเย็น" = 19:00)
-            elif re.search(r'(\d{1,2})\s*โมงเย็น', message_for_time):
-                yen_match = re.search(r'(\d{1,2})\s*โมงเย็น', message_for_time)
+            yen_match = re.search(r'(\d{1,2})\s*โมงเย็น', message_for_time)
+            if time is None and yen_match:
                 yen_hour = int(yen_match.group(1))
                 hour = yen_hour + 12  # 6 โมงเย็น = 18:00, 7 โมงเย็น = 19:00, etc.
                 time = f"{hour:02d}:00"
                 logger.info(f"[ReminderService] Detected X โมงเย็น: {time}")
             
             # Check "X ทุ่ม" (Thai evening time: 1 ทุ่ม = 7 PM, 2 ทุ่ม = 8 PM, etc.)
-            elif re.search(r'(\d{1,2})\s*ทุ่ม', message_for_time):
-                thung_match = re.search(r'(\d{1,2})\s*ทุ่ม', message_for_time)
+            thung_match = re.search(r'(\d{1,2})\s*ทุ่ม', message_for_time)
+            if time is None and thung_match:
                 thung_hour = int(thung_match.group(1))
                 hour = 18 + thung_hour  # 1 ทุ่ม = 19:00, 2 ทุ่ม = 20:00, 3 ทุ่ม = 21:00
                 time = f"{hour:02d}:00"
                 logger.info(f"[ReminderService] Detected X ทุ่ม: {time}")
             
             # Check "ตีX" (Thai midnight time: ตี1 = 1 AM, ตี2 = 2 AM, etc.)
-            # Convert ตีหนึ่ง -> ตี1, ตีสอง -> ตี2
-            elif re.search(r'ตี(\d{1,2})', message_for_time):
-                tee_match = re.search(r'ตี(\d{1,2})', message_for_time)
+            tee_match = re.search(r'ตี(\d{1,2})', message_for_time)
+            if time is None and tee_match:
                 hour = int(tee_match.group(1))
-                time = f"{hour:02d}:00"
-                logger.info(f"[ReminderService] Detected ตีX: {time}")
+                # Validate: hour must be 0-23
+                if hour > 23:
+                    is_valid_time = False
+                    invalid_reason = f"hour_out_of_range_{hour}"
+                    logger.warning(f"[TimeParserV2] Invalid hour: {hour} > 23")
+                    logger.warning(f"[TimeParserV2] validation_error={invalid_reason}")
+                else:
+                    time = f"{hour:02d}:00"
+                    logger.info(f"[TimeParserV2] raw_input={message_lower}")
+                    logger.info(f"[TimeParserV2] parsed_time={time}")
+                    logger.info(f"[ReminderService] Detected ตีX: {time}")
         
         # RULE 3: Check simple "X โมง" ONLY if no compound time detected
         if time is None:
-            # Match "8 โมง" but NOT if followed by เช้า or เย็น (already handled above)
-            time_match = re.search(r'(\d{1,2})\s*โมง(?!เช้า|เย็น)', message_for_time)
-            if time_match:
-                hour = int(time_match.group(1))
-                # If บ่าย is in message (but not บ่ายสอง/สาม/สี่), add 12
-                if "บ่าย" in message_lower and hour < 12:
-                    hour += 12
-                time = f"{hour:02d}:00"
-                logger.info(f"[ReminderService] Detected X โมง: {time}")
+            # Check "X โมงครึ่ง" (e.g., "8 โมงครึ่ง" = 08:30) BEFORE simple "X โมง"
+            half_match = re.search(r'(\d{1,2})\s*โมง\s*ครึ่ง', message_for_time)
+            if half_match:
+                hour = int(half_match.group(1))
+                minute = 30
+                time = f"{hour:02d}:30"
+                logger.info(f"[TimeParserV2] raw_input={message_lower}")
+                logger.info(f"[TimeParserV2] parsed_time={time}")
+                logger.info(f"[ReminderService] Detected X โมงครึ่ง -> {time}")
+            
+            # Match "8 โมง" but NOT if followed by เช้า or เย็น or ครึ่ง (already handled above)
+            elif re.search(r'(\d{1,2})\s*โมง(?!เช้า|เย็น|ครึ่ง)', message_for_time):
+                time_match = re.search(r'(\d{1,2})\s*โมง(?!เช้า|เย็น|ครึ่ง)', message_for_time)
+                if time_match:
+                    hour = int(time_match.group(1))
+                    # If บ่าย is in message (but not บ่ายสอง/สาม/สี่), add 12
+                    if "บ่าย" in message_lower and hour < 12:
+                        hour += 12
+                    time = f"{hour:02d}:00"
+                    logger.info(f"[ReminderService] Detected X โมง: {time}")
         
         # RULE 4: Check standalone time words (เช้า, เย็น, ทุ่ม)
         if time is None:
@@ -371,22 +390,76 @@ class ReminderService:
             if clock_match:
                 hour = int(clock_match.group(1))
                 minute = int(clock_match.group(2))
-                time = f"{hour:02d}:{minute:02d}"
-                logger.info(f"[TimeParser] raw_input={message_lower}")
-                logger.info(f"[TimeParser] matched_colon_time={time}")
-                logger.info(f"[ReminderService] Detected HH:MM -> {time}")
+                # Validate: hour 0-23, minute 0-59
+                if hour > 23:
+                    is_valid_time = False
+                    invalid_reason = f"hour_out_of_range_{hour}"
+                    logger.warning(f"[TimeParserV2] Invalid hour: {hour} > 23")
+                    logger.warning(f"[TimeParserV2] validation_error={invalid_reason}")
+                elif minute >= 60:
+                    is_valid_time = False
+                    invalid_reason = f"minute_out_of_range_{minute}"
+                    logger.warning(f"[TimeParserV2] Invalid minute: {minute} >= 60")
+                    logger.warning(f"[TimeParserV2] validation_error={invalid_reason}")
+                else:
+                    time = f"{hour:02d}:{minute:02d}"
+                    logger.info(f"[TimeParserV2] raw_input={message_lower}")
+                    logger.info(f"[TimeParserV2] parsed_time={time}")
+                    logger.info(f"[ReminderService] Detected HH:MM -> {time}")
         
         # RULE 6: Check Thai minute patterns like "9 โมง 5 นาที" or "9 โมง 30 นาที"
+        # PART 2: Enhanced minute parsing with validation
         if time is not None and minute == 0:
-            minute_match = re.search(r'(\d{1,2})\s*นาที', message_for_time)
-            if minute_match:
-                minute = int(minute_match.group(1))
-                time = f"{hour:02d}:{minute:02d}"
-                logger.info(f"[ReminderService] Detected X นาที -> {time}")
+            # Check "X โมง Y นาที" pattern first
+            minute_compound_match = re.search(r'(\d{1,2})\s*โมง\s*(\d{1,2})\s*นาที', message_for_time)
+            if minute_compound_match:
+                parsed_minute = int(minute_compound_match.group(2))
+                # Validate: minute must be 0-59
+                if parsed_minute >= 60:
+                    is_valid_time = False
+                    invalid_reason = f"minute_out_of_range_{parsed_minute}"
+                    logger.warning(f"[TimeParserV2] Invalid minute: {parsed_minute} >= 60")
+                    logger.warning(f"[TimeParserV2] validation_error={invalid_reason}")
+                else:
+                    minute = parsed_minute
+                    time = f"{hour:02d}:{minute:02d}"
+                    logger.info(f"[TimeParserV2] raw_input={message_lower}")
+                    logger.info(f"[TimeParserV2] parsed_time={time}")
+                    logger.info(f"[ReminderService] Detected X โมง Y นาที -> {time}")
+            else:
+                # Simple "X นาที" pattern
+                minute_match = re.search(r'(\d{1,2})\s*นาที', message_for_time)
+                if minute_match:
+                    minute = int(minute_match.group(1))
+                    # Validate: minute must be 0-59
+                    if minute >= 60:
+                        is_valid_time = False
+                        invalid_reason = f"minute_out_of_range_{minute}"
+                        logger.warning(f"[TimeParserV2] Invalid minute: {minute} >= 60")
+                        logger.warning(f"[TimeParserV2] validation_error={invalid_reason}")
+                    else:
+                        time = f"{hour:02d}:{minute:02d}"
+                        logger.info(f"[TimeParserV2] raw_input={message_lower}")
+                        logger.info(f"[TimeParserV2] parsed_time={time}")
+                        logger.info(f"[ReminderService] Detected X นาที -> {time}")
         
         has_time = time is not None
-        logger.info(f"[TimeParser] final_time={time}")
-        logger.info(f"[ReminderService] Final time: {time}, has_time={has_time}, hour={hour}")
+        
+        # HARDENING: Validate parsed time values
+        is_valid_time = True
+        invalid_reason = None
+        
+        if hour is not None:
+            if hour > 23:
+                is_valid_time = False
+                invalid_reason = f"hour_out_of_range_{hour}"
+                logger.warning(f"[Hardening] Invalid time: hour={hour} > 23")
+            if minute >= 60:
+                is_valid_time = False
+                invalid_reason = f"minute_out_of_range_{minute}"
+                logger.warning(f"[Hardening] Invalid time: minute={minute} >= 60")
+        
+        has_time = time is not None
         
         # ===== CLEAN MESSAGE =====
         original_message_for_debug = message_lower
@@ -476,8 +549,9 @@ class ReminderService:
         # ===== CALCULATE REMIND_AT =====
         # CRITICAL: User says "8 โมง" which is Bangkok time (UTC+7)
         # We need to convert Bangkok time to UTC before storing
+        # HARDENING: Only calculate if time is valid
         remind_at = None
-        if has_time and hour is not None:
+        if has_time and hour is not None and is_valid_time:
             from datetime import datetime, timedelta, timezone
             now = datetime.utcnow()
             reminder_date = now.date() + timedelta(days=day_offset)
@@ -497,13 +571,20 @@ class ReminderService:
             
             logger.info(f"[ReminderService] Bangkok: {reminder_datetime_bangkok} -> UTC: {remind_at}")
         
-        return {
+        # HARDENING: Add validation error to result if present
+        result = {
             "message": cleaned_final if cleaned_final else original_message,
             "date": date,
             "time": time,
             "has_time": has_time,
             "remind_at": remind_at
         }
+        
+        if not is_valid_time:
+            result["validation_error"] = invalid_reason
+            logger.info(f"[TimeParser] final_time=INVALID reason={invalid_reason}")
+        
+        return result
     
     def create_reminder(
         self,
