@@ -10,6 +10,7 @@ Implements:
 """
 import asyncio
 import logging
+import re
 from datetime import datetime, timedelta, time, date
 from typing import Optional, List, Dict, Any
 from zoneinfo import ZoneInfo
@@ -118,6 +119,7 @@ class ProactiveScheduler:
         - If time exists → format as "HH:MM - <text>"
         - If no time → return text only
         - Strip any filler text from text
+        - Backward-compatible: strip duplicated leading time if present
         
         Args:
             text: The item text (task title or reminder message)
@@ -166,6 +168,7 @@ class ProactiveScheduler:
                 time_str = None
             
             if time_str:
+                cleaned_text = self._strip_leading_time_dedup(cleaned_text, time_str)
                 result = f"{time_str} - {cleaned_text}"
                 logger.info(f"[OutputV2] normalized_text={cleaned_text[:30]}, time_prefix={time_str}, final_render={result[:50]}")
                 return result
@@ -174,6 +177,39 @@ class ProactiveScheduler:
         
         logger.info(f"[OutputV2] normalized_text={cleaned_text[:30]}, time_prefix=none")
         return cleaned_text
+    
+    def _strip_leading_time_dedup(self, message: str, time_prefix: str) -> str:
+        """
+        Backward-compatible safeguard: strip duplicated leading time.
+        
+        If message starts with same time as time_prefix, strip it.
+        E.g., time_prefix="09:00", message="09:00 ซักผ้า" -> "ซักผ้า"
+        
+        Also handles cases like "08:00-ล้างรถ" -> "ล้างรถ"
+        """
+        if not message or not time_prefix:
+            return message
+        
+        message_stripped = message.strip()
+        
+        if message_stripped.startswith(time_prefix):
+            remaining = message_stripped[len(time_prefix):].strip()
+            remaining = re.sub(r'^[\s\-:]+', '', remaining)
+            if remaining:
+                logger.info(f"[DedupSafeguard] stripped leading time {time_prefix}, remaining='{remaining}'")
+                return remaining
+        
+        time_pattern = re.match(r'^\d{2}:\\d{2}[\s\-:]*', message_stripped)
+        if time_pattern:
+            remaining = message_stripped[time_pattern.end():].strip()
+            remaining = re.sub(r'^[\s\-:]+', '', remaining)
+            if remaining:
+                logger.info(f"[DedupSafeguard] found different leading time, stripping it")
+                return remaining
+        
+        message_stripped = re.sub(r'^[^\w\u0e00-\u0fff]+', '', message_stripped)
+        
+        return message_stripped if message_stripped else message
     
     async def start(self):
         """Start the scheduler."""

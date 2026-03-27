@@ -128,13 +128,49 @@ def normalize_output_v2(output: str, output_type: str = "reminder") -> str:
             if line:
                 cleaned_lines.append(line)
         output = "\n".join(cleaned_lines)
-        
+    
     # Clean up extra whitespace
     output = re.sub(r"\n\s*\n", "\n", output)
     output = output.strip()
     
     logger.info(f"[OutputV2] normalized='{output[:50]}'")
     return output
+
+
+def _strip_leading_time_safeguard(message: str, time_prefix: str) -> str:
+    """
+    Backward-compatible safeguard: strip duplicated leading time.
+    
+    If message starts with same time as time_prefix, strip it.
+    E.g., time_prefix="09:00", message="09:00 ซักผ้า" -> "ซักผ้า"
+    
+    Also handles cases like "08:00-ล้างรถ" -> "ล้างรถ"
+    """
+    import re
+    
+    if not message or not time_prefix:
+        return message
+    
+    message_stripped = message.strip()
+    
+    if message_stripped.startswith(time_prefix):
+        remaining = message_stripped[len(time_prefix):].strip()
+        remaining = re.sub(r'^[\s\-:]+', '', remaining)
+        if remaining:
+            logger.info(f"[DedupSafeguard] stripped leading time {time_prefix}, remaining='{remaining}'")
+            return remaining
+    
+    time_pattern = re.match(r'^\d{2}:\d{2}[\s\-:]*', message_stripped)
+    if time_pattern:
+        remaining = message_stripped[time_pattern.end():].strip()
+        remaining = re.sub(r'^[\s\-:]+', '', remaining)
+        if remaining:
+            logger.info(f"[DedupSafeguard] found different leading time, stripping it")
+            return remaining
+    
+    message_stripped = re.sub(r'^[^\w\u0e00-\u0fff]+', '', message_stripped)
+    
+    return message_stripped if message_stripped else message
 
 
 def _handle_parking_query(user_id: Optional[str], user_name: str) -> str:
@@ -378,7 +414,10 @@ def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: 
     lines = [f"📅 {date_label} {user_name}มี:"]
     
     for item in timed_items:
-        lines.append(f"  • {item['time_str']} {item['message']}")
+        msg = item['message']
+        time_str = item['time_str']
+        msg = _strip_leading_time_safeguard(msg, time_str)
+        lines.append(f"  • {time_str} {msg}")
     
     if untimed_items:
         lines.append("")

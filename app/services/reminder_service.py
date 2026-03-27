@@ -637,7 +637,8 @@ class ReminderService:
         """
         Generate normalized user-facing display text for a reminder.
         
-        Format: "HH:MM ความหมาย" or fallback to cleaned message if no time.
+        CRITICAL: This function returns ACTION ONLY - no time prefix.
+        Time prefix is added by the renderers (format_reminder_display, etc.)
         
         NEVER output "08:00 เตือน" - if no meaningful action, use original or time only.
         """
@@ -648,47 +649,30 @@ class ReminderService:
         logger.info(f"[OutputV2] Normalize: original='{original}'")
         logger.info(f"[OutputV2] Normalize: time={time_val}, raw_message='{raw_message}'")
         
-        if time_val:
-            try:
-                hour, minute = map(int, time_val.split(":"))
-                time_prefix = f"{hour:02d}:{minute:02d}"
-            except (ValueError, AttributeError):
-                time_prefix = time_val
-        else:
-            time_prefix = None
-        
         action_text = raw_message.strip()
         
-        if time_prefix:
+        if time_val:
             action_text = self._remove_time_phrase_from_action(action_text)
             logger.info(f"[OutputV2] after_time_phrase_removal='{action_text}'")
         
         is_generic = action_text in ['นะ', 'ครับ', 'ค่ะ', 'ด้วย', 'หน่อย', 'ที', 'ตอน', 'เวลา', 'ให้', 'นี้', 'ฉัน', ''] or len(action_text) < 2
         
         if is_generic:
-            action_text = self._extract_fallback_action(original, time_prefix is not None)
+            action_text = self._extract_fallback_action(original, time_val is not None)
             logger.info(f"[OutputV2] extracted fallback action='{action_text}'")
         else:
             action_text = self._minimal_clean(action_text)
             logger.info(f"[OutputV2] minimal cleaned action='{action_text}'")
         
         if action_text in ['เตือน', 'ช่วย', 'แจ้ง', 'ปลุก', ''] or len(action_text) < 2:
-            action_text = self._extract_fallback_action(original, time_prefix is not None)
+            action_text = self._extract_fallback_action(original, time_val is not None)
             logger.info(f"[OutputV2] retry fallback action='{action_text}'")
         
-        if time_prefix:
+        if time_val:
             action_text = self._remove_time_phrase_from_action(action_text)
             logger.info(f"[OutputV2] after_final_cleanup='{action_text}'")
-            
-            if action_text and len(action_text) > 1:
-                normalized = f"{time_prefix} {action_text}"
-                logger.info(f"[OutputV2] final='{normalized}'")
-                return normalized
-            else:
-                logger.info(f"[OutputV2] no_action_text, using time_only")
-                return time_prefix
         
-        logger.info(f"[OutputV2] final_no_time='{action_text}'")
+        logger.info(f"[OutputV2] final_action_only='{action_text}'")
         return action_text if action_text else raw_message
     
     def _remove_time_phrase_from_action(self, text: str) -> str:
@@ -699,6 +683,7 @@ class ReminderService:
         cleaned = text
         
         time_phrase_patterns = [
+            r'\d{1,2}:\d{2}',  # HH:MM pattern first
             r'\s*ตอนเย็น\s*',
             r'\s*ตอนเช้า\s*',
             r'\s*ตอนบ่าย\s*',
@@ -822,6 +807,8 @@ class ReminderService:
         
         cleaned = re.sub(r'\s+', ' ', cleaned).strip()
         
+        cleaned = re.sub(r'^[^\w\u0e00-\u0fff]+', '', cleaned)
+        
         generic_only = ['เตือน', 'ช่วย', 'แจ้ง', 'ปลุก', 'นะ', 'ครับ', 'ค่ะ', '']
         if cleaned in generic_only:
             return ""
@@ -894,7 +881,10 @@ class ReminderService:
         lines = [title]
         
         for item in timed:
-            lines.append(f"  • {item['time_str']} {item['message']}")
+            msg = item['message']
+            time_str = item['time_str']
+            msg = self._strip_leading_time_duplication(msg, time_str)
+            lines.append(f"  • {time_str} {msg}")
         
         if untimed:
             lines.append("")
@@ -909,6 +899,9 @@ class ReminderService:
         Format a full reminder for user-facing display (morning/daily summary).
         
         Applies normalization and adds time prefix from remind_at.
+        
+        CRITICAL: Backward-compatible safeguard - strip duplicated leading time
+        if the stored message already starts with a time pattern like "09:00 ...".
         
         Returns:
             Formatted string like "19:00 - กินข้าวกับพ่อ"
@@ -941,6 +934,10 @@ class ReminderService:
         normalized_message = self.normalize_reminder_display(parsed_for_normalize)
         logger.info(f"[MorningSummaryRender] normalized_message={normalized_message[:50]}")
         
+        if time_prefix:
+            normalized_message = self._strip_leading_time_duplication(normalized_message, time_prefix)
+            logger.info(f"[MorningSummaryRender] after_dedup_cleanup={normalized_message[:50]}")
+        
         if time_prefix and normalized_message and len(normalized_message.strip()) > 1:
             final_render = f"{time_prefix} - {normalized_message}"
             logger.info(f"[MorningSummaryRender] final_render={final_render[:50]}")
@@ -950,6 +947,39 @@ class ReminderService:
         else:
             logger.info(f"[MorningSummaryRender] skipped=True reason=no_valid_render")
             return ""
+    
+    def _strip_leading_time_duplication(self, message: str, time_prefix: str) -> str:
+        """
+        Backward-compatible safeguard: strip duplicated leading time.
+        
+        If message starts with same time as time_prefix, strip it.
+        E.g., time_prefix="09:00", message="09:00 ซักผ้า" -> "ซักผ้า"
+        
+        Also handles cases like "08:00-ล้างรถ" -> "ล้างรถ"
+        """
+        if not message or not time_prefix:
+            return message
+        
+        message_stripped = message.strip()
+        
+        if message_stripped.startswith(time_prefix):
+            remaining = message_stripped[len(time_prefix):].strip()
+            remaining = re.sub(r'^[\s\-:]+', '', remaining)
+            if remaining:
+                logger.info(f"[DedupSafeguard] stripped leading time {time_prefix}, remaining='{remaining}'")
+                return remaining
+        
+        time_pattern = re.match(r'^\d{2}:\d{2}[\s\-:]*', message_stripped)
+        if time_pattern:
+            remaining = message_stripped[time_pattern.end():].strip()
+            remaining = re.sub(r'^[\s\-:]+', '', remaining)
+            if remaining:
+                logger.info(f"[DedupSafeguard] found different leading time, stripping it")
+                return remaining
+        
+        message_stripped = re.sub(r'^[^\w\u0e00-\u0fff]+', '', message_stripped)
+        
+        return message_stripped if message_stripped else message
 
 
 reminder_service = ReminderService()
