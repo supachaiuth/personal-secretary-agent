@@ -112,11 +112,16 @@ class ReminderService:
         if not date or not time:
             return None
             
-        from datetime import datetime, timedelta
+        from datetime import datetime, timedelta, timezone
         
-        now = datetime.utcnow()
+        # FIX: Use Bangkok local time (UTC+7) to calculate day offset
+        bangkok_offset = timedelta(hours=7)
+        bangkok_tz = timezone(bangkok_offset)
+        now_bangkok = datetime.now(bangkok_tz)
         
-        # Calculate day offset
+        logger.info(f"[ReminderService] calculate_remind_at: now_bangkok={now_bangkok.isoformat()}")
+        
+        # Calculate day offset based on Bangkok local date
         day_offset = 0
         if date == "tomorrow":
             day_offset = 1
@@ -132,15 +137,21 @@ class ReminderService:
             except (ValueError, AttributeError):
                 return None
         
-        # Calculate datetime
-        reminder_date = now.date() + timedelta(days=day_offset)
-        reminder_datetime = datetime.combine(
-            reminder_date,
-            datetime.min.time().replace(hour=hour, minute=minute)
+        # Calculate datetime using Bangkok local date
+        reminder_date_bangkok = now_bangkok.date() + timedelta(days=day_offset)
+        reminder_datetime_bangkok = datetime.combine(
+            reminder_date_bangkok,
+            datetime.min.time().replace(hour=hour, minute=minute),
+            tzinfo=bangkok_tz
         )
         
+        # Convert to UTC for storage
+        reminder_datetime_utc = reminder_datetime_bangkok.astimezone(timezone.utc)
+        
+        logger.info(f"[ReminderService] calculate_remind_at: {date} + {time} = Bangkok {reminder_datetime_bangkok.isoformat()} -> UTC {reminder_datetime_utc.isoformat()}")
+        
         # Return UTC ISO format
-        return reminder_datetime.isoformat() + "Z"
+        return reminder_datetime_utc.isoformat().replace("+00:00", "Z")
     
     def parse_reminder_time(self, message: str) -> Optional[datetime]:
         """Parse reminder time from message."""

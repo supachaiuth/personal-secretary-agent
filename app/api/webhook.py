@@ -132,12 +132,16 @@ def handle_pending_action(
         existing_date = existing.get("date", "today")
         existing_time = existing.get("time")
         
-        logger.info(f"[Webhook] Original message from session: '{original_message}'")
+        logger.info(f"[ReminderInvestigate] initial_message={original_message}")
+        logger.info(f"[ReminderInvestigate] initial_parsed_date={existing_date}")
+        logger.info(f"[ReminderInvestigate] session_saved_fields={existing}")
         
         parsed = reminder_service.parse_reminder_message(user_message)
         
-        logger.info(f"[Webhook] Parsed from new message: {parsed}")
-        logger.info(f"[Webhook] Existing collected: {existing}")
+        logger.info(f"[ReminderInvestigate] followup_message={user_message}")
+        logger.info(f"[ReminderInvestigate] followup_parsed_date={parsed.get('date')}")
+        logger.info(f"[ReminderInvestigate] followup_parsed_time={parsed.get('time')}")
+        logger.info(f"[ReminderInvestigate] existing_collected={existing}")
         
         has_existing_message = bool(original_message and len(original_message) >= 3)
         has_new_message = bool(parsed.get("message", "").strip())
@@ -199,6 +203,23 @@ def handle_pending_action(
         remind_at = None
         if final_date and final_time:
             remind_at = reminder_service.calculate_remind_at(final_date, final_time)
+        
+        # INVESTIGATION LOGGING: Trace final values
+        logger.info(f"[ReminderInvestigate] merge_before=existing_date={existing_date}, parsed_date={parsed_date}")
+        logger.info(f"[ReminderInvestigate] merge_after=final_date={final_date}, final_time={final_time}")
+        
+        # Convert remind_at to Bangkok time for display
+        final_confirmation_date = "unknown"
+        if remind_at:
+            try:
+                from datetime import datetime, timezone, timedelta
+                dt = datetime.fromisoformat(remind_at.replace("Z", "+00:00"))
+                bangkok_dt = dt.astimezone(timezone(timedelta(hours=7)))
+                final_confirmation_date = bangkok_dt.strftime("%d/%m/%Y %H:%M")
+            except:
+                pass
+        
+        logger.info(f"[ReminderInvestigate] final_remind_at_local={final_confirmation_date}")
         
         merged_fields = {
             "message": final_message,
