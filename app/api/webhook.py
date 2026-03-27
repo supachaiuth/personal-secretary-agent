@@ -106,6 +106,15 @@ def handle_pending_action(
             return "ได้ครับ ยกเลิกการตั้งเตือนให้แล้ว", True
         
         if classification == "frustration" or classification == "topic_change":
+            # NEW: Check if message contains strong new intent that should break out of pending flow
+            from app.agents.memory_manager import has_strong_new_intent
+            if has_strong_new_intent(user_message):
+                logger.info(f"[PendingFlow] new_intent_detected=true, clearing old session")
+                clear_session(line_user_id)
+                logger.info(f"[PendingFlow] old_session_cleared_for_new_intent=true")
+                logger.info(f"[PendingFlow] rerouting_to_fresh_detection=true")
+                return None, False  # Return None to trigger fresh command detection
+            
             if retry_count >= MAX_RETRIES:
                 clear_session(line_user_id)
                 logger.info(f"[Webhook] Max retries exceeded, session cleared")

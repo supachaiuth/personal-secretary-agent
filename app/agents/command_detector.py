@@ -34,9 +34,35 @@ PANTRY_STRONG_KEYWORDS = [
     "ซื้อเก็บ"
 ]
 
+# FIX: Use word boundaries to prevent partial matching
+# "น\." was matching "วันนี้" - now uses word boundary \b
 TIME_INDICATORS = [
-    "โมง", "บ่าย", "ทุ่ม", "ตี", "น.", "เช้า", "เย็น", "ครึ่ง",
+    "โมง", "บ่าย", "ทุ่ม", "ตี", r"\bน\.", "เช้า", "เย็น", "ครึ่ง",
     r"\d{1,2}:\d{2}", r"\d{1,2}\s*นาที"
+]
+
+# NEW: Agenda/list query patterns - should be checked BEFORE reminder keywords
+AGENDA_QUERY_PATTERNS = [
+    r"ดูสิ่งที่ต้องทำ",
+    r"ดูรายการงาน",
+    r"ดูตาราง",
+    r"มีอะไรบ้าง",
+    r"ต้องทำอะไร",
+    r"มีงานอะไร",
+    r"วันนี้.*ต้องทำ",
+    r"วันนี้.*มี",
+    r"พรุ่งนี้.*ต้องทำ",
+    r"พรุ่งนี้.*มี",
+    r"ฉันต้องทำอะไร",
+]
+
+# List task patterns
+LIST_TASKS_PATTERNS = [
+    r"^ดูรายการงาน$",
+    r"^งานมีอะไรบ้าง$",
+    r"^งานที่ต้องทำ$",
+    r"^มีงานอะไรบ้าง$",
+    r"^ดูงาน$",
 ]
 
 # HARDENING: Ambiguous keywords that need clarification when combined with date
@@ -74,32 +100,85 @@ def _get_pantry_keywords_found(message: str) -> list[str]:
     return [kw for kw in PANTRY_STRONG_KEYWORDS if kw in lower_msg]
 
 
+def _has_agenda_query_pattern(message: str) -> bool:
+    """Check if message matches agenda/list query patterns."""
+    lower_msg = message.lower()
+    for pattern in AGENDA_QUERY_PATTERNS:
+        if re.search(pattern, lower_msg):
+            logger.info(f"[IntentV2] matched_query_pattern={pattern}")
+            return True
+    return False
+
+
+def _has_list_tasks_pattern(message: str) -> bool:
+    """Check if message matches explicit list tasks patterns."""
+    lower_msg = message.lower()
+    for pattern in LIST_TASKS_PATTERNS:
+        if re.match(pattern, lower_msg):
+            logger.info(f"[IntentV2] matched_list_tasks_pattern={pattern}")
+            return True
+    return False
+
+
 def _classify_intent_with_priority_v2(message: str) -> Optional[Dict[str, Any]]:
     """
     Advanced intent classification with priority layers (Version 2).
     
     Priority (highest → lowest):
-    1. Explicit Reminder Signals (FORCE reminder)
+    1. Agenda/List Query Patterns (should be checked FIRST)
+       - "ดูสิ่งที่ต้องทำวันนี้", "วันนี้ฉันต้องทำอะไรบ้าง"
+       - "พรุ่งนี้ฉันต้องทำอะไรบ้าง"
+    2. Explicit Reminder Signals (FORCE reminder)
        - "เตือน", "แจ้งเตือน", "อย่าลืม", "ช่วยเตือน", "ปลุก"
-       - any message containing TIME (e.g., "8 โมง", "10:30")
-    2. Explicit Pantry Signals
+       - ONLY explicit time expressions (e.g., "8 โมง", "10:30"), NOT date queries
+    3. Explicit Pantry Signals
        - "เข้าตู้เย็น", "เพิ่มของ", "ซื้อเก็บ"
-    3. Ambiguous Cases
-       - "ซื้อไข่พรุ่งนี้", "ซื้อขนม 8 โมง", "อยากซื้อของพรุ่งนี้"
+    4. Ambiguous Cases
+       - "ซื้อไข่พรุ่งนี้", "ซื้อขนม 8 โมง"
     """
     msg = message.strip()
     lower_msg = msg.lower()
     
     logger.info(f"[IntentV2] raw_input={msg[:50]}")
     
-    # Priority 1: Explicit Reminder Signals
+    # Priority 1: Agenda/List Query Patterns FIRST
+    # Check these BEFORE checking time indicators to avoid false positives
+    has_agenda_query = _has_agenda_query_pattern(msg)
+    has_list_tasks = _has_list_tasks_pattern(msg)
+    
+    logger.info(f"[IntentV2] matched_query_patterns={has_agenda_query}")
+    logger.info(f"[IntentV2] matched_list_tasks_patterns={has_list_tasks}")
+    
+    if has_agenda_query:
+        target_date = "today"
+        if "พรุ่งนี้" in lower_msg or "วันพรุ่ง" in lower_msg:
+            target_date = "tomorrow"
+        logger.info(f"[IntentV2] final_intent=agenda_query reason=query_pattern_matched date={target_date}")
+        return {
+            "action": "agenda_query",
+            "extracted_fields": {"date": target_date},
+            "needs_clarification": False,
+            "source": "intent_v2"
+        }
+    
+    if has_list_tasks:
+        logger.info(f"[IntentV2] final_intent=list_tasks reason=list_tasks_pattern_matched")
+        return {
+            "action": "list_tasks",
+            "extracted_fields": {},
+            "needs_clarification": False,
+            "source": "intent_v2"
+        }
+    
+    # Priority 2: Explicit Reminder Signals (but NOT date query patterns)
     matched_reminder = _get_reminder_keywords_found(msg)
     has_time = _has_time_indicator(msg)
     
     logger.info(f"[IntentV2] matched_reminder_keywords={matched_reminder}")
     logger.info(f"[IntentV2] has_time_indicator={has_time}")
     
-    # If reminder keyword OR time indicator → MUST route to reminder
+    # Time indicator alone is NOT enough - need reminder keyword too
+    # Only route to reminder if there's an explicit reminder keyword OR explicit time
     if matched_reminder or has_time:
         # Special case: If has "ซื้อ" + time + date = ambiguous (needs clarification)
         if "ซื้อ" in lower_msg and has_time:
@@ -115,7 +194,7 @@ def _classify_intent_with_priority_v2(message: str) -> Optional[Dict[str, Any]]:
                     "source": "intent_v2"
                 }
         
-        logger.info(f"[IntentV2] final_intent=create_reminder reason=reminder_keyword_or_time")
+        logger.info(f"[IntentV2] final_intent=create_reminder reason=reminder_keyword_or_explicit_time")
         result = _parse_reminder_from_text(msg)
         return {
             "action": "create_reminder",
@@ -131,7 +210,20 @@ def _classify_intent_with_priority_v2(message: str) -> Optional[Dict[str, Any]]:
             "source": "intent_v2"
         }
     
-    # Priority 2: Explicit Pantry Signals
+    # Priority 2: Explicit Pantry Signals (but check ambiguous first)
+    # Check ambiguous BEFORE pantry to ensure proper clarification
+    if _is_ambiguous_intent(msg):
+        logger.warning(f"[IntentV2] clarification_state=ambiguous_buy_with_date")
+        logger.info(f"[IntentV2] final_intent=needs_clarification reason=ambiguous_buy_date")
+        return {
+            "action": "clarify_intent",
+            "extracted_fields": {"message": msg},
+            "needs_clarification": True,
+            "clarification_question": "ต้องการให้เตือน หรือเพิ่มเข้าตู้เย็นครับ?",
+            "source": "intent_v2"
+        }
+    
+    # Check pantry keywords AFTER ambiguous check
     matched_pantry = _get_pantry_keywords_found(msg)
     logger.info(f"[IntentV2] matched_pantry_keywords={matched_pantry}")
     
@@ -144,18 +236,6 @@ def _classify_intent_with_priority_v2(message: str) -> Optional[Dict[str, Any]]:
             "action": "add_pantry",
             "extracted_fields": {"item_name": item or msg},
             "needs_clarification": False,
-            "source": "intent_v2"
-        }
-    
-    # Priority 3: Ambiguous Cases (e.g., "ซื้อไข่พรุ่งนี้")
-    if _is_ambiguous_intent(msg):
-        logger.warning(f"[IntentV2] clarification_state=ambiguous_buy_with_date")
-        logger.info(f"[IntentV2] final_intent=needs_clarification reason=ambiguous_buy_date")
-        return {
-            "action": "clarify_intent",
-            "extracted_fields": {"message": msg},
-            "needs_clarification": True,
-            "clarification_question": "ต้องการให้เตือน หรือเพิ่มเข้าตู้เย็นครับ?",
             "source": "intent_v2"
         }
     

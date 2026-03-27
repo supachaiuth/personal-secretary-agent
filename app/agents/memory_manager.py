@@ -291,6 +291,29 @@ TOPIC_CHANGE_INDICATORS = [
     "ขอถาม", "ถามหน่อย", "มีเรื่อง", "อยากรู้"
 ]
 
+# NEW: Strong new intent patterns that should break out of pending reminder flow
+STRONG_NEW_INTENT_PATTERNS = [
+    "เพิ่มนัด", "นัด", "นัดหมาย", "นัดพบ",
+    "ดูรายการ", "ดูงาน", "ดูตาราง",
+    "วันนี้ต้องทำ", "วันนี้มีอะไร", "พรุ่งนี้ต้องทำ", "พรุ่งนี้มีอะไร",
+    "เตือน", "แจ้งเตือน", "อย่าลืม", "ปลุก",
+    "เพิ่มงาน", "สร้างงาน", "เพิ่มเข้า",
+    "ตู้เย็น", "ซื้อของ", "เข้าตู้",
+    "ยกเลิก"
+]
+
+
+def has_strong_new_intent(user_message: str) -> bool:
+    """Check if message is a strong new intent that should break pending flow."""
+    msg_lower = user_message.lower().strip()
+    
+    for pattern in STRONG_NEW_INTENT_PATTERNS:
+        if pattern in msg_lower:
+            logger.info(f"[PendingFlow] new_intent_detected pattern={pattern}")
+            return True
+    
+    return False
+
 
 def classify_reminder_followup(user_message: str) -> str:
     """

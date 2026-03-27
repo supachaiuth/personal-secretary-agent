@@ -635,13 +635,15 @@ class ReminderService:
         Generate normalized user-facing display text for a reminder.
         
         Format: "HH:MM ความหมาย" or fallback to cleaned message if no time.
+        
+        NEVER output "08:00 เตือน" - if no meaningful action, use original or time only.
         """
         time_val = parsed.get("time")
         raw_message = parsed.get("message", "")
         original = parsed.get("_original", "")
         
-        logger.info(f"[ReminderService] Normalize: original='{original}'")
-        logger.info(f"[ReminderService] Normalize: time={time_val}, raw_message='{raw_message}'")
+        logger.info(f"[OutputV2] Normalize: original='{original}'")
+        logger.info(f"[OutputV2] Normalize: time={time_val}, raw_message='{raw_message}'")
         
         if time_val:
             try:
@@ -658,58 +660,79 @@ class ReminderService:
         
         if is_generic:
             action_text = self._extract_fallback_action(original, time_prefix is not None)
-            logger.info(f"[ReminderService] Normalize: extracted fallback action='{action_text}'")
+            logger.info(f"[OutputV2] extracted fallback action='{action_text}'")
         else:
             action_text = self._minimal_clean(action_text)
-            logger.info(f"[ReminderService] Normalize: minimal cleaned action='{action_text}'")
+            logger.info(f"[OutputV2] minimal cleaned action='{action_text}'")
         
         if action_text in ['เตือน', 'ช่วย', 'แจ้ง', 'ปลุก', ''] or len(action_text) < 2:
             action_text = self._extract_fallback_action(original, time_prefix is not None)
-            logger.info(f"[ReminderService] Normalize: retry fallback action='{action_text}'")
+            logger.info(f"[OutputV2] retry fallback action='{action_text}'")
         
         if time_prefix:
-            normalized = f"{time_prefix} {action_text}"
-            logger.info(f"[ReminderService] Normalize: final='{normalized}'")
-            return normalized
+            if action_text and len(action_text) > 1:
+                normalized = f"{time_prefix} {action_text}"
+                logger.info(f"[OutputV2] final='{normalized}'")
+                return normalized
+            else:
+                logger.info(f"[OutputV2] no_action_text, using time_only")
+                return time_prefix
         
-        logger.info(f"[ReminderService] Normalize: final_no_time='{action_text}'")
-        return action_text
+        logger.info(f"[OutputV2] final_no_time='{action_text}'")
+        return action_text if action_text else raw_message
     
     def _extract_fallback_action(self, original: str, has_time: bool) -> str:
-        """Extract semantic action from original message - preserve actual intent."""
+        """
+        Extract semantic action from original message - preserve actual intent.
+        
+        Priority:
+        1. Extract text AFTER time expressions (e.g., "8 โมงไปหาหมอ" -> "ไปหาหมอ")
+        2. Remove command prefixes only (ช่วย, เตือน, etc.)
+        3. Minimal clean
+        
+        NEVER return generic "เตือน" - prefer original message or empty.
+        """
         if not original:
-            return "เตือน"
+            return ""
         
         msg = original.strip()
         msg_lower = msg.lower()
         
-        logger.info(f"[ReminderService] Extract action from: '{msg}'")
+        logger.info(f"[OutputV2] Extract action from: '{msg}'")
         
-        command_prefixes = ['ช่วย', 'เตือน', 'แจ้งเตือน', 'อย่าลืม', 'ปลุก']
+        extracted = None
+        
+        if has_time:
+            extracted = self._extract_after_time(msg, msg_lower)
+            if extracted and len(extracted) > 1:
+                logger.info(f"[OutputV2] extracted_after_time='{extracted}'")
+                return extracted
+        
+        command_prefixes = ['ช่วย', 'เตือน', 'แจ้งเตือน', 'อย่าลืม', 'ปลุก', 'ฉัน', 'ผม']
         
         for prefix in command_prefixes:
             if msg_lower.startswith(prefix):
                 remaining = msg[len(prefix):].strip()
-                if remaining:
-                    remaining = self._extract_after_time(remaining, msg_lower)
-                    if remaining and len(remaining) > 1:
-                        logger.info(f"[ReminderService] Extracted action after prefix: '{remaining}'")
-                        return remaining
-        
-        if has_time:
-            action = self._extract_after_time(msg, msg_lower)
-            if action and len(action) > 1:
-                logger.info(f"[ReminderService] Extracted action after time: '{action}'")
-                return action
+                if remaining and len(remaining) > 1:
+                    after_time = self._extract_after_time(remaining, remaining.lower())
+                    if after_time and len(after_time) > 1:
+                        logger.info(f"[OutputV2] extracted_after_prefix_and_time='{after_time}'")
+                        return after_time
+                    logger.info(f"[OutputV2] extracted_after_prefix='{remaining}'")
+                    return remaining
         
         if msg and len(msg) > 1:
             cleaned = self._minimal_clean(msg)
             if cleaned and len(cleaned) > 1:
-                logger.info(f"[ReminderService] Fallback cleaned action: '{cleaned}'")
+                command_words = ['เตือน', 'ช่วย', 'แจ้ง', 'ปลุก', 'อย่าลืม']
+                if cleaned.lower() in [w.lower() for w in command_words]:
+                    logger.warning(f"[OutputV2] action is command word only, returning empty")
+                    return ""
+                logger.info(f"[OutputV2] fallback_cleaned='{cleaned}'")
                 return cleaned
         
-        logger.warning(f"[ReminderService] Could not extract semantic action, using fallback")
-        return "เตือน"
+        logger.warning(f"[OutputV2] Could not extract semantic action, returning empty")
+        return ""
     
     def _extract_after_time(self, text: str, text_lower: str) -> str:
         """Extract action text appearing after time expression."""
@@ -730,7 +753,7 @@ class ReminderService:
                     after = self._minimal_clean(after)
                     return after
         
-        return text.strip()
+        return ""  # Return empty if no time pattern found
     
     def _minimal_clean(self, text: str) -> str:
         """Minimal clean - only remove obvious scaffolding, preserve meaning."""

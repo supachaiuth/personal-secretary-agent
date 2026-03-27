@@ -110,6 +110,71 @@ class ProactiveScheduler:
         self._last_advance_run = None
         logger.info("[SCHEDULER] Advance state reset for testing")
     
+    def _format_summary_item(self, text: str, time_value: Any, item_type: str = "task") -> str:
+        """
+        Format a task/reminder item with optional time prefix.
+        
+        Rules:
+        - If time exists → format as "HH:MM - <text>"
+        - If no time → return text only
+        - Strip any filler text from text
+        
+        Args:
+            text: The item text (task title or reminder message)
+            time_value: Time string or datetime (ISO format) or None
+            item_type: "task" or "reminder"
+        
+        Returns:
+            Formatted string with time prefix if available
+        """
+        import re
+        
+        logger.info(f"[OutputV2] raw_item={text[:50]}, type={item_type}")
+        
+        cleaned_text = text.strip()
+        
+        filler_patterns = [
+            "รับทราบครับ", "รับทราบค่ะ", "ขอรายงาน", "นี่คือรายการ",
+            "เตือน", "ช่วยเตือน", "แจ้งเตือน", "จำไว้นะ"
+        ]
+        for filler in filler_patterns:
+            if cleaned_text.lower() == filler.lower():
+                logger.warning(f"[OutputV2] stripped_filler={filler}")
+                cleaned_text = ""
+                break
+        
+        if not cleaned_text:
+            logger.warning(f"[OutputV2] empty_after_cleaning")
+            return ""
+        
+        if not time_value:
+            logger.info(f"[OutputV2] normalized_text={cleaned_text[:30]}, time_prefix=none")
+            return cleaned_text
+        
+        try:
+            if isinstance(time_value, str):
+                if "T" in time_value:
+                    dt = datetime.fromisoformat(time_value.replace("Z", "+00:00")).astimezone(BANGKOK_TZ)
+                    time_str = dt.strftime("%H:%M")
+                else:
+                    time_str = time_value.split(":")[0:2]
+                    time_str = ":".join(time_str)
+            elif isinstance(time_value, datetime):
+                dt = time_value.astimezone(BANGKOK_TZ)
+                time_str = dt.strftime("%H:%M")
+            else:
+                time_str = None
+            
+            if time_str:
+                result = f"{time_str} - {cleaned_text}"
+                logger.info(f"[OutputV2] normalized_text={cleaned_text[:30]}, time_prefix={time_str}, final_render={result[:50]}")
+                return result
+        except Exception as e:
+            logger.warning(f"[OutputV2] time_parse_error={e}")
+        
+        logger.info(f"[OutputV2] normalized_text={cleaned_text[:30]}, time_prefix=none")
+        return cleaned_text
+    
     async def start(self):
         """Start the scheduler."""
         self.is_running = True
@@ -405,9 +470,11 @@ class ProactiveScheduler:
             details = a.get("activity_data", {})
             if isinstance(details, dict):
                 title = details.get("title", "")
+                due_time = details.get("due_time") or details.get("due_date", "")
                 logger.info(f"[Daily Summary] raw item: {title}")
                 if title and len(title.strip()) > 0:
-                    task_items.append(title)
+                    formatted_item = self._format_summary_item(title, due_time, "task")
+                    task_items.append(formatted_item)
                     logger.info(f"[Daily Summary] extracted item text: {title}")
                 else:
                     logger.warning(f"[Daily Summary] skipped empty item: {details}")
@@ -419,9 +486,11 @@ class ProactiveScheduler:
             details = a.get("activity_data", {})
             if isinstance(details, dict):
                 msg = details.get("message", "")
+                remind_at = details.get("remind_at", "")
                 logger.info(f"[Daily Summary] raw item: {msg}")
                 if msg and len(msg.strip()) > 0:
-                    reminder_items.append(msg)
+                    formatted_item = self._format_summary_item(msg, remind_at, "reminder")
+                    reminder_items.append(formatted_item)
                     logger.info(f"[Daily Summary] extracted item text: {msg}")
                 else:
                     logger.warning(f"[Daily Summary] skipped empty item: {details}")
@@ -733,8 +802,7 @@ class ProactiveScheduler:
             lines.append("🚗 อัปเดตที่ควรจำ:")
             lines.append(f"  • วันนี้คุณจอดรถไว้ที่ {today_parking.get('content', 'ไม่ทราบ')}")
         
-        lines.append("")
-        lines.append("รับทราบครับ ✅")
+        logger.info(f"[OutputV2] final_render=summary_without_filler")
         
         return "\n".join(lines)
     
