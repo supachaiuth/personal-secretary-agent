@@ -278,10 +278,14 @@ def _build_pantry_list_response(user_id: Optional[str], user_name: str) -> str:
 def _format_thai_datetime(iso_string: str) -> str:
     """Convert ISO datetime to Thai display format."""
     try:
+        from zoneinfo import ZoneInfo
+        BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
         dt = datetime.fromisoformat(iso_string.replace("Z", "+00:00"))
-        bangkok_time = dt.astimezone() if dt.tzinfo else dt
+        bangkok_time = dt.astimezone(BANGKOK_TZ) if dt.tzinfo else dt
+        logger.info(f"[ReminderDisplay] remind_at_raw={iso_string}, display_timezone=Asia/Bangkok, display_time_local={bangkok_time.strftime('%H:%M')}, display_date_local={bangkok_time.strftime('%d/%m/%Y')}")
         return bangkok_time.strftime("%d/%m/%Y เวลา %H:%M น.")
-    except Exception:
+    except Exception as e:
+        logger.warning(f"[ReminderDisplay] timezone_convert_error={e}, raw_input={iso_string}")
         return iso_string
 
 
@@ -520,7 +524,7 @@ def get_response_for_action(
             "_original": extracted_fields.get("raw", "")
         }
         normalized_message = reminder_service.normalize_reminder_display(parsed_for_normalize)
-        logger.info(f"[ResponseHandler] Normalized reminder message: '{message}' -> '{normalized_message}'")
+        logger.info(f"[ReminderNormalizeFix] original_message={message}, normalized_message={normalized_message}")
         
         # CRITICAL: Validate before saving to DB
         reminder_data = {
@@ -528,7 +532,7 @@ def get_response_for_action(
             "remind_at": remind_at
         }
         if not is_valid_reminder(reminder_data):
-            logger.warning(f"[ResponseHandler] Reminder validation failed, message='{message}', remind_at={remind_at}")
+            logger.warning(f"[ResponseHandler] Reminder validation failed, message='{normalized_message}', remind_at={remind_at}")
             return f"❌ ไม่สามารถสร้างการแจ้งเตือนได้ (ข้อมูลไม่ถูกต้อง)", False
         
         # CRITICAL: Only return success AFTER DB insert succeeds
@@ -546,22 +550,22 @@ def get_response_for_action(
             reminder_repo = ReminderRepository()
             
             # HARDENING: Add debug logging for DB write
-            logger.info(f"[Hardening] db_write_attempt user_id={user_id} message={message[:30]}")
+            logger.info(f"[Hardening] db_write_attempt user_id={user_id} message={normalized_message[:30]}")
             
-            existing = reminder_repo.find_duplicate(user_id, message, remind_at)
+            existing = reminder_repo.find_duplicate(user_id, normalized_message, remind_at)
             if existing:
                 logger.info(f"[ResponseHandler] Duplicate reminder detected, reusing existing: id={existing.get('id')}")
                 formatted_time = _format_thai_datetime(existing.get("remind_at", ""))
-                return f"ℹ️ มีการเตือน '{message}' อยู่แล้ว {formatted_time} ครับ", True
+                return f"ℹ️ มีการเตือน '{normalized_message}' อยู่แล้ว {formatted_time} ครับ", True
             
-            reminder_repo.create(user_id, message, remind_at)
-            activity_repo.log_activity(user_id, "reminder_created", {"message": message, "remind_at": remind_at})
+            reminder_repo.create(user_id, normalized_message, remind_at)
+            activity_repo.log_activity(user_id, "reminder_created", {"message": normalized_message, "remind_at": remind_at})
             
             # HARDENING: Verify write succeeded
-            logger.info(f"[Hardening] db_write_success user_id={user_id} message={message[:30]}")
+            logger.info(f"[Hardening] db_write_success user_id={user_id} message={normalized_message[:30]}")
             
             formatted_time = _format_thai_datetime(remind_at)
-            return f"✅ ตั้งเตือน '{message}' {formatted_time} เรียบร้อยครับ", True
+            return f"✅ ตั้งเตือน '{normalized_message}' {formatted_time} เรียบร้อยครับ", True
         except Exception as e:
             logger.error(f"[ResponseHandler] ❌ Error creating reminder: {e}")
             return f"❌ ไม่สามารถสร้างการแจ้งเตือนได้ ลองใหม่อีกครั้งครับ", False

@@ -691,6 +691,8 @@ class ProactiveScheduler:
     
     def _format_morning_summary(self, display_name: str, tasks: List[Dict], reminders: List[Dict], memories: List[Dict], parking_mem: Optional[Dict] = None) -> str:
         """Format morning summary message."""
+        from app.services.reminder_service import reminder_service
+        
         lines = ["🌅 สรุปเช้านี้", ""]
         
         lines.append("📋 วันนี้:")
@@ -702,8 +704,17 @@ class ProactiveScheduler:
             lines.append("  ไม่มีงานที่ต้องทำ")
         
         if reminders:
-            rem_list = "\n".join([f"  • {r.get('message', '')}" for r in reminders[:3]])
-            lines.append(f"  เตือน:\n{rem_list}")
+            rendered_reminders = []
+            for r in reminders[:3]:
+                formatted = reminder_service.format_reminder_display(r)
+                if formatted:
+                    rendered_reminders.append(formatted)
+            
+            if rendered_reminders:
+                rem_list = "\n".join([f"  • {item}" for item in rendered_reminders])
+                lines.append(f"  เตือน:\n{rem_list}")
+            else:
+                lines.append("  ไม่มีเตือน")
         
         if memories:
             lines.append("")

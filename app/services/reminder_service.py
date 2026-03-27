@@ -3,10 +3,13 @@ Reminder service for managing user reminders.
 """
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import re
 import logging
 
 logger = logging.getLogger(__name__)
+
+BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
 
 INVALID_PREFIX = "[INVALID]"
 
@@ -656,6 +659,10 @@ class ReminderService:
         
         action_text = raw_message.strip()
         
+        if time_prefix:
+            action_text = self._remove_time_phrase_from_action(action_text)
+            logger.info(f"[OutputV2] after_time_phrase_removal='{action_text}'")
+        
         is_generic = action_text in ['นะ', 'ครับ', 'ค่ะ', 'ด้วย', 'หน่อย', 'ที', 'ตอน', 'เวลา', 'ให้', 'นี้', 'ฉัน', ''] or len(action_text) < 2
         
         if is_generic:
@@ -670,6 +677,9 @@ class ReminderService:
             logger.info(f"[OutputV2] retry fallback action='{action_text}'")
         
         if time_prefix:
+            action_text = self._remove_time_phrase_from_action(action_text)
+            logger.info(f"[OutputV2] after_final_cleanup='{action_text}'")
+            
             if action_text and len(action_text) > 1:
                 normalized = f"{time_prefix} {action_text}"
                 logger.info(f"[OutputV2] final='{normalized}'")
@@ -680,6 +690,36 @@ class ReminderService:
         
         logger.info(f"[OutputV2] final_no_time='{action_text}'")
         return action_text if action_text else raw_message
+    
+    def _remove_time_phrase_from_action(self, text: str) -> str:
+        """Remove time-related phrases from action text that might remain after time extraction."""
+        if not text:
+            return text
+        
+        cleaned = text
+        
+        time_phrase_patterns = [
+            r'\s*ตอนเย็น\s*',
+            r'\s*ตอนเช้า\s*',
+            r'\s*ตอนบ่าย\s*',
+            r'\s*ตอนค่ำ\s*',
+            r'\s*ตอน\s*',
+            r'\s*เช้า\s*',
+            r'\s*บ่าย\s*',
+            r'\s*เย็น\s*',
+            r'\s*ค่ำ\s*',
+            r'\s*ทุ่ม\s*',
+            r'\s*กลางคืน\s*',
+            r'\s*ก่อน\s*$',
+            r'\s*นี้\s*$',
+        ]
+        
+        for pattern in time_phrase_patterns:
+            cleaned = re.sub(pattern, ' ', cleaned, flags=re.IGNORECASE)
+        
+        cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+        
+        return cleaned
     
     def _extract_fallback_action(self, original: str, has_time: bool) -> str:
         """
@@ -764,7 +804,8 @@ class ReminderService:
         
         to_remove_start = [
             'ฉัน', 'ผม', 'คุณ', 'ด้วย', 'นะ', 'ครับ', 'ค่ะ', 'หน่อย',
-            'ของ', 'วันนี้', 'วันพรุ่งนี้', 'พรุ่งนี้', 'ที', 'นี้'
+            'ของ', 'วันนี้', 'วันพรุ่งนี้', 'พรุ่งนี้', 'ที', 'นี้',
+            'ช่วยเตือน', 'เพิ่มนัด', 'นัดหมาย', 'แจ้งเตือน'
         ]
         
         for w in to_remove_start:
@@ -773,6 +814,7 @@ class ReminderService:
         
         to_remove_patterns = [
             r'^ตอน\s*', r'^เวลา\s*', r'^ของ\s*',
+            r':\d{2}\s*', r':00\s*',
         ]
         
         for pat in to_remove_patterns:
@@ -861,6 +903,53 @@ class ReminderService:
                 lines.append(f"  • {item['message']}")
         
         return "\n".join(lines)
+    
+    def format_reminder_display(self, reminder: Dict[str, Any]) -> str:
+        """
+        Format a full reminder for user-facing display (morning/daily summary).
+        
+        Applies normalization and adds time prefix from remind_at.
+        
+        Returns:
+            Formatted string like "19:00 - กินข้าวกับพ่อ"
+            Or empty string if reminder cannot be rendered properly
+        """
+        raw_message = reminder.get("message", "")
+        remind_at = reminder.get("remind_at", "")
+        
+        logger.info(f"[MorningSummaryRender] raw_message={raw_message[:50]}")
+        
+        if not raw_message or len(raw_message.strip()) < 2:
+            logger.info(f"[MorningSummaryRender] skipped=True reason=empty_message")
+            return ""
+        
+        time_prefix = None
+        if remind_at:
+            try:
+                dt = datetime.fromisoformat(remind_at.replace("Z", "+00:00")).astimezone(BANGKOK_TZ)
+                time_prefix = dt.strftime("%H:%M")
+                logger.info(f"[MorningSummaryRender] time_prefix={time_prefix} from_remind_at={remind_at[:20]}")
+            except Exception as e:
+                logger.warning(f"[MorningSummaryRender] time_parse_error={e}")
+        
+        parsed_for_normalize = {
+            "message": raw_message,
+            "time": time_prefix,
+            "_original": raw_message
+        }
+        
+        normalized_message = self.normalize_reminder_display(parsed_for_normalize)
+        logger.info(f"[MorningSummaryRender] normalized_message={normalized_message[:50]}")
+        
+        if time_prefix and normalized_message and len(normalized_message.strip()) > 1:
+            final_render = f"{time_prefix} - {normalized_message}"
+            logger.info(f"[MorningSummaryRender] final_render={final_render[:50]}")
+            return final_render
+        elif normalized_message and len(normalized_message.strip()) > 1:
+            return normalized_message
+        else:
+            logger.info(f"[MorningSummaryRender] skipped=True reason=no_valid_render")
+            return ""
 
 
 reminder_service = ReminderService()
