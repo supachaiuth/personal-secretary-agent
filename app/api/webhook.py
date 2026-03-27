@@ -79,7 +79,7 @@ def handle_pending_action(
     Returns:
         (response_text, is_complete)
     """
-    from app.agents.memory_manager import get_session, classify_reminder_followup
+    from app.agents.memory_manager import get_session, classify_reminder_followup, has_strong_new_intent, clear_session
     
     session = get_session(line_user_id)
     pending_action = session.pending_action
@@ -88,36 +88,91 @@ def handle_pending_action(
     if not pending_action:
         return None, False
     
-    logger.info(f"[Webhook] ===== PENDING ACTION DETECTED =====")
-    logger.info(f"[Webhook] pending_action: {pending_action}")
-    logger.info(f"[Webhook] Session collected_fields: {session.collected_fields}")
-    logger.info(f"[Webhook] User message: {user_message}")
-    logger.info(f"[Webhook] Retry count: {retry_count}")
+    existing_collected = session.collected_fields or {}
     
-    if pending_action == "create_reminder":
+    logger.info(f"[PendingActionFix] ===== PENDING ACTION DETECTED =====")
+    logger.info(f"[PendingActionFix] pending_action={pending_action}")
+    logger.info(f"[PendingActionFix] existing_collected={existing_collected}")
+    logger.info(f"[PendingActionFix] user_message={user_message}")
+    logger.info(f"[PendingActionFix] retry_count={retry_count}")
+    
+    branch_entered = pending_action
+    merged_fields_initialized = False
+    merged_fields = {}
+    rerouted = False
+    
+    if pending_action == "clarify_intent":
+        logger.info(f"[PendingActionFix] branch_entered=clarify_intent")
+        
+        if has_strong_new_intent(user_message):
+            logger.info(f"[PendingActionFix] new_intent_detected=true in clarify_intent")
+            clear_session(line_user_id)
+            rerouted = True
+            logger.info(f"[PendingActionFix] rerouted=True, returning None for fresh detection")
+            return None, False
+        
+        clarification_question = existing_collected.get("clarification_question", "ขอความชัดเจนได้ไหมครับ?")
+        logger.info(f"[PendingActionFix] clarification_question={clarification_question}")
+        
+        merged_fields = existing_collected.copy()
+        merged_fields["user_replied"] = user_message
+        merged_fields_initialized = True
+        
+        logger.info(f"[PendingActionFix] merged_fields_initialized={merged_fields_initialized}")
+        logger.info(f"[PendingActionFix] branch_result_action=clarify_intent_continue")
+        
+        from app.services.response_handler import get_response_for_action
+        response, is_complete = get_response_for_action(
+            action="clarify_intent",
+            extracted_fields=merged_fields,
+            user_id=user_id,
+            line_user_id=line_user_id,
+            user_role=user_role
+        )
+        
+        logger.info(f"[PendingActionFix] clarify_intent_response={response[:50] if response else 'None'}")
+        logger.info(f"[PendingActionFix] is_complete={is_complete}")
+        
+        if is_complete:
+            clear_session(line_user_id)
+            logger.info(f"[PendingActionFix] session_cleared=True")
+        else:
+            from app.agents.memory_manager import update_session
+            update_session(
+                line_user_id,
+                pending_action=pending_action,
+                needs_clarification=True,
+                user_message=user_message,
+                collected_fields=merged_fields
+            )
+            logger.info(f"[PendingActionFix] session_updated=clarify_intent")
+        
+        logger.info(f"[PendingActionFix] safe_return=True")
+        return response, is_complete
+    
+    elif pending_action == "create_reminder":
+        logger.info(f"[PendingActionFix] branch_entered=create_reminder")
+        
         classification = classify_reminder_followup(user_message)
-        logger.info(f"[Webhook] Follow-up classification: {classification}, retry={retry_count}")
+        logger.info(f"[PendingActionFix] classification={classification}")
         
         MAX_RETRIES = 2
         
         if classification == "explicit_cancel":
             clear_session(line_user_id)
-            logger.info(f"[Webhook] Reminder cancelled by user, session cleared")
+            logger.info(f"[PendingActionFix] reminder_cancelled=True")
             return "ได้ครับ ยกเลิกการตั้งเตือนให้แล้ว", True
         
         if classification == "frustration" or classification == "topic_change":
-            # NEW: Check if message contains strong new intent that should break out of pending flow
-            from app.agents.memory_manager import has_strong_new_intent
             if has_strong_new_intent(user_message):
-                logger.info(f"[PendingFlow] new_intent_detected=true, clearing old session")
+                logger.info(f"[PendingActionFix] new_intent_detected=true, clearing old session")
                 clear_session(line_user_id)
-                logger.info(f"[PendingFlow] old_session_cleared_for_new_intent=true")
-                logger.info(f"[PendingFlow] rerouting_to_fresh_detection=true")
-                return None, False  # Return None to trigger fresh command detection
+                rerouted = True
+                return None, False
             
             if retry_count >= MAX_RETRIES:
                 clear_session(line_user_id)
-                logger.info(f"[Webhook] Max retries exceeded, session cleared")
+                logger.info(f"[PendingActionFix] max_retries_exceeded=True")
                 return "ขอโทษครับ ผมเข้าใจแล้ว ถ้าต้องการตั้งเตือนใหม่ พิมพ์มาได้เลยนะครับ", True
             else:
                 session.increment_retry()
@@ -126,13 +181,11 @@ def handle_pending_action(
         if classification == "invalid_time_reply":
             if retry_count >= MAX_RETRIES:
                 clear_session(line_user_id)
-                logger.info(f"[Webhook] Max retries exceeded (invalid), session cleared")
+                logger.info(f"[PendingActionFix] max_retries_exceeded_invalid=True")
                 return "ผมยกเลิกการตั้งเตือนให้ก่อนนะครับ ถ้าต้องการตั้งใหม่ พิมพ์มาได้เลย", True
             else:
                 session.increment_retry()
                 return "ยังไม่เห็นเวลาแจ้งเตือนครับ ถ้าต้องการยกเลิกพิมพ์ 'ยกเลิก' ได้", False
-        
-        merged_fields = {}
         
         from app.services.reminder_service import reminder_service
         
@@ -141,35 +194,26 @@ def handle_pending_action(
         existing_date = existing.get("date", "today")
         existing_time = existing.get("time")
         
-        logger.info(f"[ReminderInvestigate] initial_message={original_message}")
-        logger.info(f"[ReminderInvestigate] initial_parsed_date={existing_date}")
-        logger.info(f"[ReminderInvestigate] session_saved_fields={existing}")
+        logger.info(f"[PendingActionFix] initial_message={original_message}")
+        logger.info(f"[PendingActionFix] initial_parsed_date={existing_date}")
         
         parsed = reminder_service.parse_reminder_message(user_message)
         
-        logger.info(f"[ReminderInvestigate] followup_message={user_message}")
-        logger.info(f"[ReminderInvestigate] followup_parsed_date={parsed.get('date')}")
-        logger.info(f"[ReminderInvestigate] followup_parsed_time={parsed.get('time')}")
-        logger.info(f"[ReminderInvestigate] existing_collected={existing}")
+        logger.info(f"[PendingActionFix] followup_parsed_date={parsed.get('date')}")
+        logger.info(f"[PendingActionFix] followup_parsed_time={parsed.get('time')}")
         
         has_existing_message = bool(original_message and len(original_message) >= 3)
         has_new_message = bool(parsed.get("message", "").strip())
         
-        logger.info(f"[Webhook] has_existing_message={has_existing_message}, has_new_message={has_new_message}")
-        
         if has_existing_message:
             final_message = original_message
-            logger.info(f"[Webhook] Preserving original message: '{final_message}'")
         elif has_new_message and parsed.get("message") not in ["ฉัน", "พรุ่งนี้"]:
             final_message = parsed.get("message", "").strip()
-            logger.info(f"[Webhook] Using new message: '{final_message}'")
         else:
             final_message = ""
-            logger.info(f"[Webhook] No valid message, will need clarification")
         
         parsed_date = parsed.get("date", "today")
         parsed_time = parsed.get("time")
-        parsed_message = parsed.get("message", "")
         
         explicit_date_patterns = [
             "พรุ่งนี้", "วันพรุ่ง", "มะรืนนี้", "มะรืน", "วันนี้",
@@ -179,56 +223,27 @@ def handle_pending_action(
         msg_lower = user_message.lower()
         has_explicit_new_date = any(pattern in msg_lower for pattern in explicit_date_patterns)
         
-        logger.info(f"[ReminderMerge] existing_date={existing_date}, parsed_date={parsed_date}, explicit_new_date={has_explicit_new_date}")
-        
         if has_explicit_new_date:
             final_date = parsed_date
-            logger.info(f"[ReminderMerge] Explicit new date detected, override: {final_date}")
         elif existing_date and existing_date != "today" and parsed_time:
             final_date = existing_date
-            logger.info(f"[ReminderMerge] Keep existing date (time-only reply): {final_date}")
         elif existing_date and existing_date != "today":
             final_date = existing_date
-            logger.info(f"[ReminderMerge] Keep existing date (no date in follow-up): {final_date}")
         else:
             final_date = parsed_date or existing.get("date", "today")
-            logger.info(f"[ReminderMerge] Using parsed date: {final_date}")
         
         final_time = parsed_time or existing_time
         
         if parsed_time:
             final_time = parsed_time
-            logger.info(f"[ReminderMerge] parsed_time={parsed_time}, final_time={final_time}")
         elif existing_time:
             final_time = existing_time
-            logger.info(f"[ReminderMerge] using existing_time={existing_time}, final_time={final_time}")
-        
-        logger.info(f"[ReminderMerge] final_message={final_message}, final_date={final_date}, final_time={final_time}")
         
         final_has_time = parsed.get("has_time", False) or existing.get("has_time", False) or final_time is not None
-        
-        logger.info(f"[Webhook] final_time={final_time}, final_date={final_date}, final_has_time={final_has_time}")
         
         remind_at = None
         if final_date and final_time:
             remind_at = reminder_service.calculate_remind_at(final_date, final_time)
-        
-        # INVESTIGATION LOGGING: Trace final values
-        logger.info(f"[ReminderInvestigate] merge_before=existing_date={existing_date}, parsed_date={parsed_date}")
-        logger.info(f"[ReminderInvestigate] merge_after=final_date={final_date}, final_time={final_time}")
-        
-        # Convert remind_at to Bangkok time for display
-        final_confirmation_date = "unknown"
-        if remind_at:
-            try:
-                from datetime import datetime, timezone, timedelta
-                dt = datetime.fromisoformat(remind_at.replace("Z", "+00:00"))
-                bangkok_dt = dt.astimezone(timezone(timedelta(hours=7)))
-                final_confirmation_date = bangkok_dt.strftime("%d/%m/%Y %H:%M")
-            except:
-                pass
-        
-        logger.info(f"[ReminderInvestigate] final_remind_at_local={final_confirmation_date}")
         
         merged_fields = {
             "message": final_message,
@@ -237,18 +252,35 @@ def handle_pending_action(
             "has_time": final_has_time,
             "remind_at": remind_at
         }
+        merged_fields_initialized = True
         
-        logger.info(f"[Webhook] Reminder merged: message='{final_message}', date={final_date}, time={final_time}, has_time={final_has_time}, remind_at={remind_at}")
-        
+        logger.info(f"[PendingActionFix] merged_fields_initialized={merged_fields_initialized}")
+        logger.info(f"[PendingActionFix] final_message={final_message}")
+        logger.info(f"[PendingActionFix] final_date={final_date}")
+        logger.info(f"[PendingActionFix] final_time={final_time}")
+    
     elif pending_action == "add_task":
+        logger.info(f"[PendingActionFix] branch_entered=add_task")
+        merged_fields = existing_collected.copy()
         merged_fields["title"] = user_message.strip()
-        logger.info(f"[Webhook] Task title: {merged_fields['title']}")
+        merged_fields_initialized = True
+        logger.info(f"[PendingActionFix] task_title={merged_fields['title']}")
     
     elif pending_action == "add_pantry":
+        logger.info(f"[PendingActionFix] branch_entered=add_pantry")
+        merged_fields = existing_collected.copy()
         merged_fields["item_name"] = user_message.strip()
-        logger.info(f"[Webhook] Pantry item: {merged_fields['item_name']}")
+        merged_fields_initialized = True
+        logger.info(f"[PendingActionFix] item_name={merged_fields['item_name']}")
     
-    # Get response with merged fields
+    else:
+        logger.warning(f"[PendingActionFix] unknown_pending_action={pending_action}, clearing session")
+        clear_session(line_user_id)
+        return "ขอโทษครับ มีปัญหากับระบบ ลองใหม่อีกครั้งนะครับ", True
+    
+    logger.info(f"[PendingActionFix] merged_fields={merged_fields}")
+    logger.info(f"[PendingActionFix] branch_entered={branch_entered}")
+    
     from app.services.response_handler import get_response_for_action
     response, is_complete = get_response_for_action(
         action=pending_action,
@@ -258,14 +290,14 @@ def handle_pending_action(
         user_role=user_role
     )
     
-    logger.info(f"[Webhook] Response: {response[:100] if response else 'None'}...")
-    logger.info(f"[Webhook] Is complete: {is_complete}")
+    logger.info(f"[PendingActionFix] response={response[:50] if response else 'None'}")
+    logger.info(f"[PendingActionFix] is_complete={is_complete}")
     
-    # Update session with new collected fields
     if is_complete:
         clear_session(line_user_id)
-        logger.info(f"[Webhook] ===== ACTION COMPLETE, SESSION CLEARED =====")
+        logger.info(f"[PendingActionFix] action_complete_session_cleared=True")
     else:
+        from app.agents.memory_manager import update_session
         update_session(
             line_user_id,
             pending_action=pending_action,
@@ -273,8 +305,9 @@ def handle_pending_action(
             user_message=user_message,
             collected_fields=merged_fields
         )
-        logger.info(f"[Webhook] ===== PENDING, SESSION UPDATED =====")
+        logger.info(f"[PendingActionFix] session_updated_for_continue=True")
     
+    logger.info(f"[PendingActionFix] safe_return=True")
     return response, is_complete
 
 
