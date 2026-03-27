@@ -520,10 +520,26 @@ class ProactiveScheduler:
         
         logger.info(f"[Daily Summary] Today items: tasks={tasks_created}, reminders={reminders_created}, pantry={pantry_updates}")
         
-        upcoming_result = supabase.table("reminders").select("*").eq("user_id", user_id).eq("sent", False).gte("remind_at", datetime.now(BANGKOK_TZ).isoformat()).execute()
+        upcoming_result = supabase.table("reminders").select("*").eq("user_id", user_id).eq("sent", False).gte("remind_at", datetime.now(BANGKOK_TZ).isoformat()).order("remind_at", desc=False).execute()
         upcoming = upcoming_result.data or []
         
-        upcoming = deduplicate_reminders(filter_valid_reminders(upcoming))
+        fetched_count = len(upcoming)
+        logger.info(f"[UpcomingSort] fetched_count={fetched_count}")
+        
+        upcoming = filter_valid_reminders(upcoming)
+        after_filter_count = len(upcoming)
+        logger.info(f"[UpcomingSort] after_filter_count={after_filter_count}")
+        
+        upcoming = deduplicate_reminders(upcoming)
+        after_dedup_count = len(upcoming)
+        logger.info(f"[UpcomingSort] after_dedup_count={after_dedup_count}")
+        
+        try:
+            upcoming = sorted(upcoming, key=lambda x: datetime.fromisoformat(x.get("remind_at", "").replace("Z", "+00:00")).astimezone(BANGKOK_TZ))
+            logger.info(f"[UpcomingSort] sorted=True first_items_after_sort={[u.get('remind_at', '')[:16] for u in upcoming[:3]]}")
+        except Exception as e:
+            logger.warning(f"[UpcomingSort] sort_error={e}")
+        
         logger.info(f"[Daily Summary] Valid upcoming reminders for user {user_id}: {len(upcoming)}")
         
         today_parking = self.get_latest_parking_memory(user_id)
@@ -702,9 +718,11 @@ class ProactiveScheduler:
                     lines.append(f"  • {content}")
         
         if parking_mem:
-            lines.append("")
-            lines.append("🚗 สิ่งที่ควรจำ:")
-            lines.append(f"  • คุณจอดรถไว้ที่ {parking_mem.get('content', 'ไม่ทราบ')}")
+            parking_message = self._format_parking_message(parking_mem)
+            if parking_message:
+                lines.append("")
+                lines.append("🚗 สิ่งที่ควรจำ:")
+                lines.append(f"  • {parking_message}")
         
         lines.append("")
         lines.append("สวัสดีครับ ☀️")

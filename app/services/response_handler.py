@@ -145,11 +145,17 @@ def _handle_parking_query(user_id: Optional[str], user_name: str) -> str:
     - days_diff <= 3: "คุณจอดรถไว้ที่ ชั้น {location}"
     - days_diff > 3: "คุณจอดรถไว้ที่ ชั้น {location} (บันทึกล่าสุดเมื่อ {days_diff} วันที่แล้ว)"
     - no data: "ยังไม่มีข้อมูลที่จอดรถครับ"
+    
+    NOTE: Direct parking query ALWAYS returns latest record (no freshness hiding)
     """
     from datetime import datetime
     from zoneinfo import ZoneInfo
+    from app.services.supabase_service import get_supabase
     
     BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
+    supabase = get_supabase()
+    
+    logger.info(f"[ParkingQuery] query_start=True user_id={user_id}")
     
     if not user_id:
         logger.info(f"[ParkingQuery] response_mode=no_user")
@@ -159,12 +165,14 @@ def _handle_parking_query(user_id: Optional[str], user_name: str) -> str:
         result = supabase.table("user_memories").select("*").eq("user_id", user_id).eq("topic", "parking").order("updated_at", desc=True).limit(1).execute()
         
         if not result.data or len(result.data) == 0:
-            logger.info(f"[ParkingQuery] response_mode=no_data")
+            logger.info(f"[ParkingQuery] latest_record_found=False")
             return f"{user_name}ยังไม่มีข้อมูลที่จอดรถครับ"
         
         parking = result.data[0]
         location = parking.get("content", "")
         updated_at = parking.get("updated_at", "")
+        
+        logger.info(f"[ParkingQuery] latest_record_found=True location={location} updated_at={updated_at}")
         
         if not location:
             logger.info(f"[ParkingQuery] response_mode=empty_location")
@@ -176,15 +184,15 @@ def _handle_parking_query(user_id: Optional[str], user_name: str) -> str:
             parking_date = updated_dt.date()
             days_diff = (current_date - parking_date).days
             
-            logger.info(f"[ParkingQuery] location={location}, updated_at={updated_at}, days_diff={days_diff}")
+            logger.info(f"[ParkingQuery] days_diff={days_diff}")
             
             if days_diff <= 3:
                 response = f"{user_name}คุณจอดรถไว้ที่ {location}"
-                logger.info(f"[ParkingQuery] response_mode=fresh")
+                logger.info(f"[ParkingQuery] response_mode=fresh response_text={response[:30]}")
                 return response
             else:
                 response = f"{user_name}คุณจอดรถไว้ที่ {location} (บันทึกล่าสุดเมื่อ {days_diff} วันที่แล้ว)"
-                logger.info(f"[ParkingQuery] response_mode=stale")
+                logger.info(f"[ParkingQuery] response_mode=stale response_text={response[:30]}")
                 return response
         except Exception as e:
             logger.warning(f"[ParkingQuery] date_parse_error={e}")
