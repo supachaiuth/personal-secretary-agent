@@ -905,16 +905,22 @@ class ReminderService:
         # Sort by length descending to match longest name first (e.g., "มกราคม" before "มกรา")
         for month_name, month_num in sorted(MONTH_NAMES.items(), key=lambda x: -len(x[0])):
             escaped = re.escape(month_name)
-            # Day before month: "5 เมษา", "5apr", "5 apr"
-            m = re.search(r'(\d{1,2})\s*' + escaped + r'(?!\w)', msg_clean)
+            
+            # Day before month: "5 เมษา", "5apr", "5 apr", "5 เมษาเวลา"
+            # Removed (?!\w) because it blocks matching Thai words that aren't space-separated.
+            # Using negative lookahead for English letters only to avoid matching "1 Apr" from "1 April" (though sorted length helps).
+            lookahead = r'(?![a-zA-Z])' if re.match(r'^[a-zA-Z]+$', month_name) else ''
+            
+            m = re.search(r'(\d{1,2})\s*' + escaped + lookahead, msg_clean)
             if m:
                 day = int(m.group(1))
                 result = self._resolve_year(month_num, day)
                 if result:
                     logger.info(f"[SpecificDate] parsed '{month_name}' day={day} -> {result}")
                     return result
+                    
             # Month before day: "เมษา 5", "apr 5"
-            m = re.search(r'(?<!\w)' + escaped + r'\s*(\d{1,2})(?!\d)', msg_clean)
+            m = re.search(escaped + r'\s*(\d{1,2})(?!\d)', msg_clean)
             if m:
                 day = int(m.group(1))
                 result = self._resolve_year(month_num, day)
