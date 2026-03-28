@@ -63,6 +63,11 @@ AGENDA_QUERY_PATTERNS = [
     r"พรุ่งนี้.*ต้องทำ",
     r"พรุ่งนี้.*มี",
     r"ฉันต้องทำอะไร",
+    r"รายการที่ต้องทำ",
+    r"มีอะไรต้องทำ",
+    r"ต้องทำอะไรบ้าง",
+    r"สิ่งที่ต้องทำ",
+    r"งานที่ต้องทำ",
 ]
 
 # List task patterns
@@ -93,7 +98,9 @@ LOCATION_KEYWORDS = [
     "แถวไหน",
     "จุดไหน",
     "บริเวณไหน",
-    "ฝั่งไหน"
+    "ฝั่งไหน",
+    "ไว้ไหน",
+    "ที่จอดไหน",
 ]
 
 # Negative patterns that should NOT be considered as location queries

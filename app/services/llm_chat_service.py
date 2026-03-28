@@ -55,11 +55,17 @@ PARKING_QUERY_PATTERNS = [
     r"รถอยู่ตรงไหน",
     r"parking\s*where",
     r"where\s*parking",
+    r"จอดรถชั้นอะไร",
+    r"จอดรถชั้นไหนครับ",
+    r"จอดรถชั้นไหนคะ",
+    r"ฉันจอดรถไว้ไหน",
+    r"จอดรถไว้ไหน",
+    r"จอดรถตรงไหน",
 ]
 
 PARKING_EXCLUDE_WORDS = [
-    "ไหน", "ที่ไหน", "ตรงไหน", "อยู่ไหน","แถวไหน","ไว้ไหน", "ชั้นไหน", "ไหนครับ", "ไหนคะ",
-    "where", "which", "location", "ที่", "อยู่"
+    "ที่ไหน", "ตรงไหน", "อยู่ไหน", "แถวไหน", "ไว้ไหน", "ชั้นไหน", "ไหนครับ", "ไหนคะ",
+    "where", "which", "location", "ที่", "อยู่", "อะไร"
 ]
 
 
@@ -142,6 +148,7 @@ def handle_parking_memory(line_user_id: str, user_message: str, user_id: str) ->
                     return response
             
             logger.info(f"[LLMChat] Parking DB read no data: user_id={user_id}")
+            return "ยังไม่มีข้อมูลที่จอดรถไว้ครับ คุณสามารถบอกผมได้เลย เช่น 'จอดรถที่ชั้น 2'"
         except Exception as e:
             logger.error(f"[LLMChat] Parking DB read ERROR: {e}")
     
