@@ -59,6 +59,19 @@ INTENT_RESPONSES = {
 FALLBACK_RESPONSE = "ขอโทษนะครับ ผมไม่เข้าใจ ลองบอกใหม่ได้ไหมครับ? เช่น ช่วยเตือนงาน, ดูตารางประชุม, ซื้อของ"
 
 
+def _is_remind_at_in_past(remind_at: str) -> bool:
+    """Check if remind_at datetime has already passed (Bangkok time)."""
+    try:
+        from zoneinfo import ZoneInfo
+        BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
+        dt = datetime.fromisoformat(remind_at.replace("Z", "+00:00"))
+        now_bkk = datetime.now(BANGKOK_TZ)
+        return dt.astimezone(BANGKOK_TZ) <= now_bkk
+    except Exception:
+        return False
+
+
+
 # PART 5: Output Consistency - normalize output formats
 OUTPUT_FORBIDDEN_WORDS = [
     "รับทราบครับ", "รับทราบค่ะ", "เตือน", "จำไว้นะ",
@@ -342,12 +355,20 @@ def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: 
     if target_date == "tomorrow":
         agenda_date = (now + timedelta(days=1)).date()
         date_label = "พรุ่งนี้"
+    elif target_date == "day_after_tomorrow":
+        agenda_date = (now + timedelta(days=2)).date()
+        date_label = "มะรืนนี้"
     elif target_date == "today":
         agenda_date = now.date()
         date_label = "วันนี้"
     else:
-        agenda_date = now.date()
-        date_label = "วันนี้"
+        try:
+            from datetime import date as date_type
+            agenda_date = date_type.fromisoformat(target_date)
+            date_label = f"วันที่ {agenda_date.strftime('%d/%m/%Y')}"
+        except Exception:
+            agenda_date = now.date()
+            date_label = "วันนี้"
     
     date_start = datetime.combine(agenda_date, datetime.min.time(), tzinfo=bangkok_tz)
     date_end = datetime.combine(agenda_date, datetime.max.time(), tzinfo=bangkok_tz)
@@ -552,7 +573,16 @@ def get_response_for_action(
             logger.warning(f"[HardeningV2] db_write_blocked reason=missing_time")
             return f"ต้องการให้เตือนกี่โมงครับ?", False
         
-        logger.info(f"[HardeningV2] safety_guard_passed user_id={user_id}")
+        # Check if remind_at is in the past
+        if _is_remind_at_in_past(remind_at):
+            from zoneinfo import ZoneInfo
+            now_bkk = datetime.now(ZoneInfo("Asia/Bangkok"))
+            logger.warning(f"[HardeningV2] db_write_blocked reason=remind_at_in_past remind_at={remind_at}")
+            return (
+                f"❌ เวลานั้นผ่านไปแล้วนะครับ ตอนนี้ {now_bkk.strftime('%H:%M')} น.แล้วครับ\n"
+                f"ต้องการตั้งเตือนวันอื่นหรือเวลาอื่นไหมครับ?"
+            ), False
+
         
         # Normalize the reminder message before saving
         from app.services.reminder_service import reminder_service
@@ -613,6 +643,82 @@ def get_response_for_action(
     if action == "calendar_query":
         return f"{user_name}ขอโทษครับ ยังไม่สามารถดูตารางนัดหมายได้ในตอนนี้", True
     
+    # ===== cancel_reminder =====
+    if action == "cancel_reminder":
+        keyword = extracted_fields.get("keyword", "")
+        date_filter = extracted_fields.get("date_filter")
+        selected_index = extracted_fields.get("selected_index")
+        matches = extracted_fields.get("matches", [])
+        
+        if not user_id:
+            return f"{user_name}ขอโทษครับ ไม่สามารถยกเลิกนัดหมายได้ในตอนนี้", False
+        
+        from app.repositories.reminder_repository import ReminderRepository
+        reminder_repo = ReminderRepository()
+        
+        # Step 1: Initial search
+        if not matches:
+            if not keyword:
+                return "ต้องการให้ยกเลิกนัดหมายอะไรครับ?", False
+                
+            search_results = reminder_repo.search_by_keyword(user_id, keyword, date_filter)
+            if not search_results:
+                return f"ไม่พบการตั้งเตือนที่มีคำว่า '{keyword}' ครับ", True
+                
+            if len(search_results) == 1:
+                # Single match -> ask for confirmation
+                rem = search_results[0]
+                extracted_fields["matches"] = [rem]
+                formatted_time = _format_thai_datetime(rem.get("remind_at", ""))
+                return f"ต้องการยกเลิกการตั้งเตือน '{rem.get('message')}' เวลา {formatted_time} ใช่ไหมครับ?\n(พิมพ์ 'ใช่', 'ยืนยัน', 'ตกลง' หรือพิมพ์ตัวเลข '1' เพื่อยืนยัน)", False
+            else:
+                # Multiple matches -> show list
+                extracted_fields["matches"] = search_results
+                lines = [f"พบการตั้งเตือน {len(search_results)} รายการ กรุณาพิมพ์หมายเลขเพื่อเลือกรายการที่ต้องการยกเลิกครับ:"]
+                for i, rem in enumerate(search_results, 1):
+                    formatted_time = _format_thai_datetime(rem.get("remind_at", ""))
+                    lines.append(f"{i}. {rem.get('message')} ({formatted_time})")
+                return "\n".join(lines), False
+                
+        # Step 2 & 3: Handle selection or confirmation
+        else:
+            search_results = matches
+            if len(search_results) == 1:
+                # Confirmation expected
+                reply = extracted_fields.get("user_replied", "").lower().strip()
+                if reply in ["ใช่", "ยืนยัน", "ตกลง", "y", "yes", "1", "ok", "โอเค"]:
+                    selected_rem = search_results[0]
+                elif reply in ["ไม่", "ยกเลิก", "n", "no"]:
+                    return "ยกเลิกการทำรายการเรียบร้อยครับ", True
+                else:
+                    return "กรุณายืนยันว่าต้องการยกเลิกการตั้งเตือนนี้หรือไม่? (พิมพ์ 'ใช่' หรือ 'ไม่')", False
+            else:
+                # Number selection expected
+                try:
+                    reply = extracted_fields.get("user_replied", "").strip()
+                    if reply in ["ไม่", "ยกเลิก", "n", "no"]:
+                        return "ยกเลิกการทำรายการเรียบร้อยครับ", True
+                        
+                    idx = int(reply) - 1
+                    if 0 <= idx < len(search_results):
+                        selected_rem = search_results[idx]
+                    else:
+                        return f"กรุณาพิมพ์หมายเลข 1 ถึง {len(search_results)} ครับ", False
+                except ValueError:
+                    return f"กรุณาพิมพ์หมายเลขที่ต้องการ (เช่น '1', '2') ครับ", False
+            
+            # Execute deletion
+            rem_id = selected_rem.get("id")
+            rem_msg = selected_rem.get("message")
+            try:
+                reminder_repo.delete(rem_id)
+                activity_repo.log_activity(user_id, "reminder_deleted", {"message": rem_msg})
+                logger.info(f"[ResponseHandler] Canceled reminder {rem_id} for user {user_id}")
+                return f"✅ ยกเลิกการตั้งเตือน '{rem_msg}' เรียบร้อยแล้วครับ", True
+            except Exception as e:
+                logger.error(f"[ResponseHandler] Error canceling reminder: {e}")
+                return "❌ เกิดข้อผิดพลาดในการยกเลิกการตั้งเตือน ลองใหม่อีกครั้งครับ", True
+
     # ===== unknown action =====
     return f"{user_name}ขอโทษครับ ไม่เข้าใจ ลองใหม่ได้ไหมครับ?", False
 

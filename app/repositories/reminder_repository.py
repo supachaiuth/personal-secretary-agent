@@ -76,5 +76,34 @@ class ReminderRepository:
     def mark_sent(self, reminder_id: str):
         return self.client.table("reminders").update({"sent": True}).eq("id", reminder_id).execute()
     
+    def search_by_keyword(self, user_id: str, keyword: str, date_str: str = None):
+        """
+        Search pending reminders by keyword (case-insensitive partial match).
+        Optionally filter by date string "YYYY-MM-DD" (Bangkok time).
+        Returns list of matching reminder dicts.
+        """
+        result = self.client.table("reminders").select("*").eq("user_id", user_id).eq("sent", False).execute()
+        matches = []
+        keyword_lower = keyword.lower().strip()
+        
+        for r in (result.data or []):
+            msg = r.get("message", "").lower()
+            if keyword_lower and keyword_lower not in msg:
+                continue
+            if date_str:
+                remind_at = r.get("remind_at", "")
+                if remind_at:
+                    try:
+                        from datetime import datetime
+                        from zoneinfo import ZoneInfo
+                        BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
+                        dt = datetime.fromisoformat(remind_at.replace("Z", "+00:00")).astimezone(BANGKOK_TZ)
+                        if dt.strftime("%Y-%m-%d") != date_str:
+                            continue
+                    except Exception:
+                        pass
+            matches.append(r)
+        return matches
+
     def delete(self, reminder_id: str):
         return self.client.table("reminders").delete().eq("id", reminder_id).execute()

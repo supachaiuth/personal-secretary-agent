@@ -11,6 +11,28 @@ logger = logging.getLogger(__name__)
 
 BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
 
+# Month name mappings for specific date parsing (Thai + English)
+MONTH_NAMES = {
+    "มกราคม": 1, "มกรา": 1, "ม.ค.": 1,
+    "กุมภาพันธ์": 2, "กุมภา": 2, "ก.พ.": 2,
+    "มีนาคม": 3, "มีนา": 3, "มี.ค.": 3,
+    "เมษายน": 4, "เมษา": 4, "เม.ย.": 4,
+    "พฤษภาคม": 5, "พฤษภา": 5, "พ.ค.": 5,
+    "มิถุนายน": 6, "มิถุนา": 6, "มิ.ย.": 6,
+    "กรกฎาคม": 7, "กรกฎา": 7, "ก.ค.": 7,
+    "สิงหาคม": 8, "สิงหา": 8, "ส.ค.": 8,
+    "กันยายน": 9, "กันยา": 9, "ก.ย.": 9,
+    "ตุลาคม": 10, "ตุลา": 10, "ต.ค.": 10,
+    "พฤศจิกายน": 11, "พฤศจิกา": 11, "พ.ย.": 11,
+    "ธันวาคม": 12, "ธันวา": 12, "ธ.ค.": 12,
+    "january": 1, "jan": 1, "february": 2, "feb": 2,
+    "march": 3, "mar": 3, "april": 4, "apr": 4,
+    "may": 5, "june": 6, "jun": 6, "july": 7, "jul": 7,
+    "august": 8, "aug": 8, "september": 9, "sep": 9,
+    "october": 10, "oct": 10, "november": 11, "nov": 11,
+    "december": 12, "dec": 12,
+}
+
 INVALID_PREFIX = "[INVALID]"
 
 GARBAGE_PATTERNS = [
@@ -124,13 +146,6 @@ class ReminderService:
         
         logger.info(f"[ReminderService] calculate_remind_at: now_bangkok={now_bangkok.isoformat()}")
         
-        # Calculate day offset based on Bangkok local date
-        day_offset = 0
-        if date == "tomorrow":
-            day_offset = 1
-        elif date == "day_after_tomorrow":
-            day_offset = 2
-        
         # Parse time
         hour = 9
         minute = 0
@@ -140,8 +155,23 @@ class ReminderService:
             except (ValueError, AttributeError):
                 return None
         
-        # Calculate datetime using Bangkok local date
-        reminder_date_bangkok = now_bangkok.date() + timedelta(days=day_offset)
+        # Calculate reminder date — relative OR absolute ("YYYY-MM-DD")
+        if date in ("today", "tomorrow", "day_after_tomorrow", None):
+            day_offset = 0
+            if date == "tomorrow":
+                day_offset = 1
+            elif date == "day_after_tomorrow":
+                day_offset = 2
+            reminder_date_bangkok = now_bangkok.date() + timedelta(days=day_offset)
+        else:
+            # Absolute date string "YYYY-MM-DD"
+            try:
+                from datetime import date as date_type
+                reminder_date_bangkok = date_type.fromisoformat(date)
+            except (ValueError, AttributeError):
+                logger.warning(f"[ReminderService] Invalid absolute date: {date}")
+                return None
+        
         reminder_datetime_bangkok = datetime.combine(
             reminder_date_bangkok,
             datetime.min.time().replace(hour=hour, minute=minute),
@@ -262,6 +292,12 @@ class ReminderService:
         elif "วันนี้" in message_lower:
             date = "today"
             day_offset = 0
+        else:
+            # Try specific date parsing ("5 เมษา", "1 Apr", "Apr 5", "วันที่ 5 เม.ย.")
+            specific = self._parse_specific_date(original_message)
+            if specific:
+                date = specific  # "YYYY-MM-DD" absolute string
+                day_offset = None  # not used for absolute dates
         
         logger.info(f"[ReminderService] Detected date: {date}")
         
@@ -555,13 +591,24 @@ class ReminderService:
         # HARDENING: Only calculate if time is valid
         remind_at = None
         if has_time and hour is not None and is_valid_time:
-            from datetime import datetime, timedelta, timezone
-            now = datetime.utcnow()
-            reminder_date = now.date() + timedelta(days=day_offset)
-            
-            # Create datetime as Bangkok time first
+            from datetime import datetime, timedelta, timezone, date as date_type
             bangkok_offset = timedelta(hours=7)
             bangkok_tz = timezone(bangkok_offset)
+            now_bkk = datetime.now(bangkok_tz)
+            
+            # Resolve date — relative or absolute
+            if date in ("today", "tomorrow", "day_after_tomorrow") or (date == "today" and day_offset is not None):
+                _day_offset = day_offset if day_offset is not None else 0
+                reminder_date = now_bkk.date() + timedelta(days=_day_offset)
+            elif isinstance(date, str) and len(date) == 10 and "-" in date:
+                # Absolute date "YYYY-MM-DD"
+                try:
+                    reminder_date = date_type.fromisoformat(date)
+                except (ValueError, AttributeError):
+                    reminder_date = now_bkk.date()
+            else:
+                reminder_date = now_bkk.date()
+            
             reminder_datetime_bangkok = datetime.combine(
                 reminder_date,
                 datetime.min.time().replace(hour=hour, minute=minute),
@@ -840,6 +887,52 @@ class ReminderService:
             return "เตือน"
         
         return cleaned
+    
+    def _parse_specific_date(self, message: str) -> Optional[str]:
+        """
+        Parse specific date expressions like '5 เมษา', '1 Apr', 'Apr 5', 'วันที่ 5 เม.ย.'.
+        Returns "YYYY-MM-DD" string or None.
+        If date has passed this year, auto-advances to next year.
+        """
+        msg_clean = message.lower().strip()
+        # Remove common prefix words
+        msg_clean = re.sub(r'วันที่\s*', '', msg_clean)
+        
+        # Sort by length descending to match longest name first (e.g., "มกราคม" before "มกรา")
+        for month_name, month_num in sorted(MONTH_NAMES.items(), key=lambda x: -len(x[0])):
+            escaped = re.escape(month_name)
+            # Day before month: "5 เมษา", "5apr", "5 apr"
+            m = re.search(r'(\d{1,2})\s*' + escaped + r'(?!\w)', msg_clean)
+            if m:
+                day = int(m.group(1))
+                result = self._resolve_year(month_num, day)
+                if result:
+                    logger.info(f"[SpecificDate] parsed '{month_name}' day={day} -> {result}")
+                    return result
+            # Month before day: "เมษา 5", "apr 5"
+            m = re.search(r'(?<!\w)' + escaped + r'\s*(\d{1,2})(?!\d)', msg_clean)
+            if m:
+                day = int(m.group(1))
+                result = self._resolve_year(month_num, day)
+                if result:
+                    logger.info(f"[SpecificDate] parsed '{month_name}' day={day} -> {result}")
+                    return result
+        
+        return None
+    
+    def _resolve_year(self, month: int, day: int) -> Optional[str]:
+        """Return 'YYYY-MM-DD', choosing next year if date has already passed this year."""
+        from datetime import date as date_type
+        from zoneinfo import ZoneInfo
+        now = datetime.now(ZoneInfo("Asia/Bangkok")).date()
+        try:
+            target = date_type(now.year, month, day)
+            if target < now:
+                target = date_type(now.year + 1, month, day)
+            return target.isoformat()
+        except ValueError:
+            logger.warning(f"[SpecificDate] Invalid date: month={month} day={day}")
+            return None
     
     def format_reminder_list(self, reminders: List[Dict[str, Any]], title: str = "รายการเตือน") -> str:
         """

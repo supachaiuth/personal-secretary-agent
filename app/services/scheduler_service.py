@@ -230,6 +230,7 @@ class ProactiveScheduler:
                 await self.check_and_run_daily_summary(now_bkk, today)
                 
                 await self.check_due_reminders()
+                await self.check_advance_1hour_reminders()
             
             except Exception as e:
                 logger.error(f"Scheduler error: {e}")
@@ -360,6 +361,82 @@ class ProactiveScheduler:
                     logger.warning(f"[SCHEDULER] daily_summary FAILED: user_id={user_id} push_failed")
             except Exception as e:
                 logger.error(f"[SCHEDULER] daily_summary ERROR: user_id={user_id} error={e}")
+    
+    async def check_advance_1hour_reminders(self):
+        """Check and send 1-hour advance reminders."""
+        try:
+            now_bkk = datetime.now(BANGKOK_TZ)
+            window_start = now_bkk + timedelta(minutes=55)
+            window_end = now_bkk + timedelta(minutes=65)
+            
+            result = supabase.table("reminders").select("*").eq("sent", False).execute()
+            if not result.data:
+                return
+            
+            # Filter reminders in the 1-hour window
+            upcoming = []
+            for r in result.data:
+                remind_at_str = r.get("remind_at", "")
+                if not remind_at_str:
+                    continue
+                try:
+                    remind_dt = datetime.fromisoformat(remind_at_str.replace("Z", "+00:00")).astimezone(BANGKOK_TZ)
+                    if window_start <= remind_dt <= window_end:
+                        upcoming.append(r)
+                except Exception:
+                    pass
+            
+            if not upcoming:
+                return
+            
+            # Check which ones already had 1h notice sent
+            reminder_ids = [r.get("id") for r in upcoming if r.get("id")]
+            sent_result = supabase.table("reminder_sent_logs").select("reminder_id").in_("reminder_id", reminder_ids).eq("sent_type", "1hour").execute()
+            already_sent_ids = {s.get("reminder_id") for s in (sent_result.data or [])}
+            
+            for reminder in upcoming:
+                reminder_id = reminder.get("id")
+                if str(reminder_id) in already_sent_ids:
+                    logger.info(f"[1hr Reminder] Already sent 1h notice for id={reminder_id}")
+                    continue
+                
+                if not is_valid_reminder(reminder):
+                    continue
+                
+                user_id = reminder.get("user_id")
+                message = reminder.get("message", "")
+                remind_at_str = reminder.get("remind_at", "")
+                
+                user_result = supabase.table("users").select("line_user_id").eq("id", user_id).execute()
+                if not user_result.data:
+                    continue
+                
+                line_user_id = user_result.data[0].get("line_user_id")
+                if not line_user_id:
+                    continue
+                
+                # Format reminder time
+                try:
+                    remind_dt = datetime.fromisoformat(remind_at_str.replace("Z", "+00:00")).astimezone(BANGKOK_TZ)
+                    time_display = remind_dt.strftime("%H:%M")
+                except Exception:
+                    time_display = ""
+                
+                text = f"⏰ อีก 1 ชั่วโมง:\n\n{message}"
+                if time_display:
+                    text = f"⏰ แจ้งเตือนล่วงหน้า (1 ชั่วโมง)\nเวลา {time_display} น. — {message}"
+                
+                push_message(line_user_id, text)
+                logger.info(f"[1hr Reminder] Sent 1h advance notice to {line_user_id}: {message}")
+                
+                # Log so we don't send again (but DO NOT mark sent=True, still need the on-time one)
+                supabase.table("reminder_sent_logs").insert({
+                    "reminder_id": str(reminder_id),
+                    "sent_type": "1hour"
+                }).execute()
+        
+        except Exception as e:
+            logger.error(f"[1hr Reminder] Error: {e}")
     
     async def check_due_reminders(self):
         """Check and send due reminders."""

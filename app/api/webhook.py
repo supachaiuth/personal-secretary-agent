@@ -273,6 +273,13 @@ def handle_pending_action(
         merged_fields_initialized = True
         logger.info(f"[PendingActionFix] item_name={merged_fields['item_name']}")
     
+    elif pending_action == "cancel_reminder":
+        logger.info(f"[PendingActionFix] branch_entered=cancel_reminder")
+        merged_fields = existing_collected.copy()
+        merged_fields["user_replied"] = user_message.strip()
+        merged_fields_initialized = True
+        logger.info(f"[PendingActionFix] reply={merged_fields['user_replied']}")
+    
     else:
         logger.warning(f"[PendingActionFix] unknown_pending_action={pending_action}, clearing session")
         clear_session(line_user_id)

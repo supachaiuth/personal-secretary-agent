@@ -23,6 +23,15 @@ REMINDER_FORCE_KEYWORDS = [
     "ปลุก"
 ]
 
+CANCEL_REMINDER_KEYWORDS = [
+    "ยกเลิกนัด",
+    "ยกเลิกเตือน",
+    "ยกเลิกการแจ้งเตือน",
+    "ลบนัด",
+    "ลบเตือน",
+    "ลบการแจ้งเตือน",
+]
+
 PANTRY_STRONG_KEYWORDS = [
     "ซื้อ",
     "ตู้เย็น",
@@ -225,24 +234,42 @@ def _classify_intent_with_priority_v2(message: str) -> Optional[Dict[str, Any]]:
     Advanced intent classification with priority layers (Version 2).
     
     Priority (highest → lowest):
-    1. Agenda/List Query Patterns (should be checked FIRST)
-       - "ดูสิ่งที่ต้องทำวันนี้", "วันนี้ฉันต้องทำอะไรบ้าง"
-       - "พรุ่งนี้ฉันต้องทำอะไรบ้าง"
+    0. Cancel Reminder ("ยกเลิกนัด", "ลบเตือน") — checked FIRST
+    1. Agenda/List Query Patterns
     2. Explicit Reminder Signals (FORCE reminder)
-       - "เตือน", "แจ้งเตือน", "อย่าลืม", "ช่วยเตือน", "ปลุก"
-       - ONLY explicit time expressions (e.g., "8 โมง", "10:30"), NOT date queries
     3. Explicit Pantry Signals
-       - "เข้าตู้เย็น", "เพิ่มของ", "ซื้อเก็บ"
     4. Ambiguous Cases
-       - "ซื้อไข่พรุ่งนี้", "ซื้อขนม 8 โมง"
     """
     msg = message.strip()
     lower_msg = msg.lower()
     
     logger.info(f"[IntentV2] raw_input={msg[:50]}")
     
+    # Priority 0: Cancel Reminder — checked BEFORE anything else
+    for kw in CANCEL_REMINDER_KEYWORDS:
+        if kw in lower_msg:
+            # Extract keyword (what to cancel) and optional date
+            keyword = re.sub(r'|'.join(re.escape(k) for k in CANCEL_REMINDER_KEYWORDS), '', lower_msg).strip()
+            keyword = re.sub(r'\s+(พรุ่งนี้|วันนี้|มะรืนนี้|วันพรุ่งนี้)\s*', ' ', keyword).strip()
+            keyword = re.sub(r'ครับ|ค่ะ|นะ|หน่อย|ด้วย', '', keyword).strip()
+            
+            date_filter = None
+            if "พรุ่งนี้" in lower_msg or "วันพรุ่ง" in lower_msg:
+                date_filter = "tomorrow"
+            elif "วันนี้" in lower_msg:
+                date_filter = "today"
+            
+            logger.info(f"[IntentV2] final_intent=cancel_reminder keyword='{keyword}' date={date_filter}")
+            return {
+                "action": "cancel_reminder",
+                "extracted_fields": {"keyword": keyword, "date_filter": date_filter},
+                "needs_clarification": False,
+                "source": "intent_v2"
+            }
+    
     # Priority 1: Agenda/List Query Patterns FIRST
     # Check these BEFORE checking time indicators to avoid false positives
+
     has_agenda_query = _has_agenda_query_pattern(msg)
     has_list_tasks = _has_list_tasks_pattern(msg)
     
@@ -253,6 +280,14 @@ def _classify_intent_with_priority_v2(message: str) -> Optional[Dict[str, Any]]:
         target_date = "today"
         if "พรุ่งนี้" in lower_msg or "วันพรุ่ง" in lower_msg:
             target_date = "tomorrow"
+        elif "มะรืนนี้" in lower_msg:
+            target_date = "day_after_tomorrow"
+        else:
+            from app.services.reminder_service import reminder_service
+            specific_date = reminder_service._parse_specific_date(msg)
+            if specific_date:
+                target_date = specific_date
+                
         logger.info(f"[IntentV2] final_intent=agenda_query reason=query_pattern_matched date={target_date}")
         return {
             "action": "agenda_query",
