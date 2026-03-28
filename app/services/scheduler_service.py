@@ -473,7 +473,17 @@ class ProactiveScheduler:
                 display_name = user_result.data[0].get("display_name", "คุณ")
                 
                 if line_user_id:
-                    text = f"🔔 พลาดไม่ได้!\n\n{message}"
+                    import random
+                    due_greetings = [
+                        "ถึงเวลาแล้วครับ! ⏰",
+                        "ได้เวลาแล้วคร้าบ 🔔",
+                        "อย่าลืมนัดหมายนะจ้ะ 📌",
+                        "เตือนความจำครับ ⏰",
+                        "ถึงเวลานัดแล้วจ๊ะ! ✨",
+                        "ได้เวลาตามที่นัดไว้แล้วครับ 🕒"
+                    ]
+                    greeting = random.choice(due_greetings)
+                    text = f"{greeting}\n\n{message}"
                     push_message(line_user_id, text)
                     logger.info(f"Sent due reminder to {line_user_id}: {message}")
                 

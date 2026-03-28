@@ -575,10 +575,14 @@ class ReminderService:
             fallback_triggered = True
             cleaned = original_message
             cleaned = re.sub(r'^(ช่วย|เตือน|แจ้งเตือน|อย่าลืม)\s*', '', cleaned)
-            cleaned = re.sub(r'\s+(พรุ่งนี้|วันนี้|มะรืนนี้|วันพรุ่งนี้)\s+', ' ', cleaned)
+            cleaned = re.sub(r'\s+(พรุ่งนี้|วันนี้|มะรืนนี้|วันพรุ่งนี้)\s*', ' ', cleaned)
             cleaned = re.sub(r'\d{1,2}\s*โมง.*$', '', cleaned)
             cleaned = re.sub(r'\d{1,2}:\d{2}.*$', '', cleaned)
+            cleaned = re.sub(r'\d{1,2}\.\d{2}.*$', '', cleaned)
             cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+            # If after aggressive fallback cleanup, it is still low quality, just admit it's empty
+            if not cleaned or cleaned in ['นะ', 'ครับ', 'ค่ะ', 'ด้วย', 'หน่อย', 'ที', 'ตอน', 'เวลา', 'ให้', 'ผม', 'กู', 'หนู', 'ฉัน']:
+                cleaned = ""
             logger.info(f"[ReminderService] Clean: fallback triggered, safe_text='{cleaned}'")
         
         cleaned_final = cleaned
