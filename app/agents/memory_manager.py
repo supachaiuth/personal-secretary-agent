@@ -347,9 +347,20 @@ def classify_reminder_followup(user_message: str) -> str:
         logger.info(f"[ReminderFollowup] Classification: valid_time_reply")
         return "valid_time_reply"
     
+    # NEW: Use AI Classifier to detect if it's a topic change (chat/other)
+    # This is more robust than simple keywords
+    try:
+        from app.services.intent_classifier import classify_intent
+        intent = classify_intent(user_message)
+        if intent == "chat" or (intent and intent != "create_reminder"):
+            logger.info(f"[ReminderFollowup] AI detected topic_change: {intent}")
+            return "topic_change"
+    except Exception as e:
+        logger.error(f"[ReminderFollowup] AI classification failed: {e}")
+    
     if any(kw in msg_lower for kw in ["โมง", "บ่าย", "เช้า", "เย็น", "ทุ่ม", "ตี", "น.", ":", "เวลา"]):
         logger.info(f"[ReminderFollowup] Classification: invalid_time_reply (time-like but not parsed)")
         return "invalid_time_reply"
     
-    logger.info(f"[ReminderFollowup] Classification: topic_change (no time detected)")
+    logger.info(f"[ReminderFollowup] Classification: topic_change (fallback)")
     return "topic_change"

@@ -164,10 +164,17 @@ def handle_pending_action(
             return "ได้ครับ ยกเลิกการตั้งเตือนให้แล้ว", True
         
         if classification == "frustration" or classification == "topic_change":
+            # If it's a strong new secretary intent, break out and process as new command
             if has_strong_new_intent(user_message):
                 logger.info(f"[PendingActionFix] new_intent_detected=true, clearing old session")
                 clear_session(line_user_id)
-                rerouted = True
+                return None, False
+            
+            # [NEW] If it's a topic change (e.g., general question), clear session and 
+            # let it fall through to LLM Chat Mode in the main loop.
+            if classification == "topic_change":
+                logger.info(f"[PendingActionFix] topic_change detected, clearing session for LLM Chat")
+                clear_session(line_user_id)
                 return None, False
             
             if retry_count >= MAX_RETRIES:

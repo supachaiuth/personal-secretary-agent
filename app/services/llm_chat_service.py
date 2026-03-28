@@ -229,10 +229,20 @@ def build_messages(
     """Build messages list including system prompt and conversation history."""
     messages = []
     
-    # Add system prompt
+    # Add system prompt with dynamic context (Time/Date)
+    from datetime import datetime
+    import pytz
+    bangkok_tz = pytz.timezone('Asia/Bangkok')
+    now = datetime.now(bangkok_tz)
+    current_time_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    day_name = now.strftime("%A")
+    
+    system_prompt = get_system_prompt()
+    system_prompt += f"\n\n## Context\n- Current Time (Bangkok): {current_time_str}\n- Today: {day_name}\n- User Name: {user_name}\n- User Role: {user_role}"
+    
     messages.append({
         "role": "system",
-        "content": get_system_prompt()
+        "content": system_prompt
     })
     
     # Add conversation history

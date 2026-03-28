@@ -329,31 +329,29 @@ def _classify_intent_with_priority_v2(message: str) -> Optional[Dict[str, Any]]:
             "source": "intent_v2"
         }
     
-    # Priority 2: Explicit Reminder Signals (but NOT date query patterns)
+    # Priority 2: Explicit Reminder Signals
     matched_reminder = _get_reminder_keywords_found(msg)
     has_time = _has_time_indicator(msg)
     
     logger.info(f"[IntentV2] matched_reminder_keywords={matched_reminder}")
     logger.info(f"[IntentV2] has_time_indicator={has_time}")
     
-    # Time indicator alone is NOT enough - need reminder keyword too
-    # Only route to reminder if there's an explicit reminder keyword OR explicit time
-    if matched_reminder or has_time:
-        # Special case: If has "ซื้อ" + time + date = ambiguous (needs clarification)
-        if "ซื้อ" in lower_msg and has_time:
-            has_date = any(kw in lower_msg for kw in ["พรุ่งนี้", "วันนี้", "มะรืนนี้"])
-            if has_date:
-                logger.warning(f"[IntentV2] clarification_state=ambiguous_buy_with_time_and_date")
-                logger.info(f"[IntentV2] final_intent=needs_clarification reason=ambiguous_buy_time_date")
-                return {
-                    "action": "clarify_intent",
-                    "extracted_fields": {"message": msg},
-                    "needs_clarification": True,
-                    "clarification_question": "ต้องการให้เตือน หรือเพิ่มเข้าตู้เย็นครับ?",
-                    "source": "intent_v2"
-                }
+    # NEW rule: Only path to reminder if there is an EXPLICIT reminder keyword.
+    # If there's only a time indicator but no reminder keyword, we don't force it here.
+    # This allows questions like "Switzerland what time?" to fall through to AI/Chat.
+    if matched_reminder:
+        # Special case: If has "ซื้อ" + reminder keyword = ambiguous
+        if "ซื้อ" in lower_msg:
+            logger.warning(f"[IntentV2] clarification_state=ambiguous_buy_with_reminder_keyword")
+            return {
+                "action": "clarify_intent",
+                "extracted_fields": {"message": msg},
+                "needs_clarification": True,
+                "clarification_question": "ต้องการให้เตือน หรือเพิ่มเข้าตู้เย็นครับ?",
+                "source": "intent_v2"
+            }
         
-        logger.info(f"[IntentV2] final_intent=create_reminder reason=reminder_keyword_or_explicit_time")
+        logger.info(f"[IntentV2] final_intent=create_reminder reason=reminder_keyword_found")
         result = _parse_reminder_from_text(msg)
         return {
             "action": "create_reminder",
@@ -368,6 +366,11 @@ def _classify_intent_with_priority_v2(message: str) -> Optional[Dict[str, Any]]:
             "needs_clarification": result.get("needs_clarification", False),
             "source": "intent_v2"
         }
+    
+    # If it has time but NO reminder keyword, we let it fall through 
+    # so the AI Classifier (classify_intent) can decide if it's a reminder or just chat.
+    if has_time:
+        logger.info(f"[IntentV2] has_time=True but no reminder keyword, falling through to AI/Patterns")
     
     # Priority 2: Explicit Pantry Signals (but check ambiguous first)
     # Check ambiguous BEFORE pantry to ensure proper clarification
