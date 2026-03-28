@@ -231,8 +231,8 @@ def build_messages(
     
     # Add system prompt with dynamic context (Time/Date)
     from datetime import datetime
-    import pytz
-    bangkok_tz = pytz.timezone('Asia/Bangkok')
+    from zoneinfo import ZoneInfo
+    bangkok_tz = ZoneInfo("Asia/Bangkok")
     now = datetime.now(bangkok_tz)
     current_time_str = now.strftime("%Y-%m-%d %H:%M:%S")
     day_name = now.strftime("%A")
