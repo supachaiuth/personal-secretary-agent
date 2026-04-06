@@ -79,6 +79,29 @@ AGENDA_QUERY_PATTERNS = [
     r"ฉันต้องทำอะไร",
 ]
 
+# Connect calendar patterns
+CONNECT_CALENDAR_PATTERNS = [
+    r"เชื่อมต่อปฏิทิน",
+    r"connect.*calendar",
+    r"ตั้งค่า.*calendar",
+    r"ผูก.*google",
+    r"sync.*calendar",
+]
+
+# Create calendar event patterns
+CREATE_CALENDAR_EVENT_PATTERNS = [
+    r"เพิ่มนัดหมาย",
+    r"เพิ่มนัด",
+    r"จองนัด",
+    r"ลงนัด",
+    r"นัดหมาย",
+    r"มีนัด",
+    r"จองตัว",
+    r"เพิ่มลงปฏิทิน",
+    r"add.*calendar",
+    r"create.*event",
+]
+
 # List task patterns
 LIST_TASKS_PATTERNS = [
     r"^ดูรายการงาน$",
@@ -259,6 +282,17 @@ def _classify_intent_with_priority_v2(message: str) -> Optional[Dict[str, Any]]:
     
     logger.info(f"[IntentV2] raw_input={msg[:50]}")
     
+    # Priority -1: Connect Calendar (Meta-command)
+    for pattern in CONNECT_CALENDAR_PATTERNS:
+        if re.search(pattern, lower_msg):
+            logger.info(f"[IntentV2] final_intent=connect_calendar reason=pattern_matched")
+            return {
+                "action": "connect_calendar",
+                "extracted_fields": {},
+                "needs_clarification": False,
+                "source": "intent_v2"
+            }
+
     # Priority 0: Cancel Reminder — checked BEFORE anything else
     for kw in CANCEL_REMINDER_KEYWORDS:
         if kw in lower_msg:
@@ -329,6 +363,26 @@ def _classify_intent_with_priority_v2(message: str) -> Optional[Dict[str, Any]]:
             "source": "intent_v2"
         }
     
+    # New Priority: Create Calendar Event
+    # Check this BEFORE generic reminders if it contains calendar keywords
+    for pattern in CREATE_CALENDAR_EVENT_PATTERNS:
+        if re.search(pattern, lower_msg):
+            logger.info(f"[IntentV2] final_intent=create_calendar_event reason=calendar_keyword_found")
+            result = _parse_reminder_from_text(msg)
+            return {
+                "action": "create_calendar_event",
+                "extracted_fields": {
+                    "message": result.get("message", msg),
+                    "date": result.get("date"),
+                    "time": result.get("time"),
+                    "has_time": result.get("has_time", False),
+                    "remind_at": result.get("remind_at"),
+                    "validation_error": result.get("validation_error")
+                },
+                "needs_clarification": result.get("needs_clarification", False),
+                "source": "intent_v2"
+            }
+
     # Priority 2: Explicit Reminder Signals
     matched_reminder = _get_reminder_keywords_found(msg)
     has_time = _has_time_indicator(msg)

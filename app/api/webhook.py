@@ -194,7 +194,13 @@ def handle_pending_action(
                 session.increment_retry()
                 return "ยังไม่เห็นเวลาแจ้งเตือนครับ ถ้าต้องการยกเลิกพิมพ์ 'ยกเลิก' ได้", False
         
-        from app.services.reminder_service import reminder_service
+        from app.services.line_service import (
+            verify_signature, 
+            reply_message, 
+            push_message, 
+            reply_flex_message, 
+            push_flex_message
+        )
         
         existing = session.collected_fields or {}
         original_message = existing.get("message", "")
@@ -204,6 +210,7 @@ def handle_pending_action(
         logger.info(f"[PendingActionFix] initial_message={original_message}")
         logger.info(f"[PendingActionFix] initial_parsed_date={existing_date}")
         
+        from app.services.reminder_service import reminder_service
         parsed = reminder_service.parse_reminder_message(user_message)
         
         logger.info(f"[PendingActionFix] followup_parsed_date={parsed.get('date')}")
@@ -224,7 +231,7 @@ def handle_pending_action(
         
         explicit_date_patterns = [
             "พรุ่งนี้", "วันพรุ่ง", "มะรืนนี้", "มะรืน", "วันนี้",
-            "วันจันทร์", "วันอังคาร", "วันพุธ", "วันพฤหัสบดี", "วันศุกร์", "วันเสาร์", "วันอาทิตย์",
+            "วันจันทร์", "วันอังคาร", "วันพุธ", "วันพฤหัสบดี", "วันศุกร์", "วันเสาร์", "วันอังคาร",
             "วันจันทร์หน้า", "วันอังคารหน้า", "วันพุธหน้า", "วันพฤหัสหน้า", "วันศุกร์หน้า"
         ]
         msg_lower = user_message.lower()
@@ -455,11 +462,16 @@ async def webhook(
             
             logger.info(f"[WebhookFlow] sending_reply event_id={event_id}")
             
-            success = line_service.reply_message(reply_token, response_text)
-            
-            if success:
+            if response_text:
+                if isinstance(response_text, dict):
+                    # Send Flex Message
+                    line_service.reply_flex_message(reply_token, "ผู้ช่วยส่วนตัวของคุณ", response_text)
+                else:
+                    # Send Text Message
+                    line_service.reply_message(reply_token, response_text)
+                
                 logger.info(f"[WebhookFlow] reply_sent event_id={event_id}")
-                logger.info(f"[Webhook] Reply sent: {response_text[:50]}...")
+                logger.info(f"[Webhook] Reply sent: {str(response_text)[:50]}...")
             else:
                 logger.warning(f"[Webhook] Failed to send reply for: {user_message}")
     

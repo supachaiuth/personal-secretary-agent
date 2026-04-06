@@ -20,6 +20,7 @@ from app.services.supabase_service import get_supabase
 from app.services.line_service import push_message
 from app.services.reminder_service import is_valid_reminder, INVALID_PREFIX
 
+from app.services.calendar_sync_service import calendar_sync_service
 logger = logging.getLogger(__name__)
 
 BANGKOK_TZ = ZoneInfo("Asia/Bangkok")
@@ -231,6 +232,8 @@ class ProactiveScheduler:
                 
                 await self.check_due_reminders()
                 await self.check_advance_1hour_reminders()
+                await self.check_calendar_1hour_reminders()
+                await self.check_and_run_calendar_sync()
             
             except Exception as e:
                 logger.error(f"Scheduler error: {e}")
@@ -438,6 +441,61 @@ class ProactiveScheduler:
         except Exception as e:
             logger.error(f"[1hr Reminder] Error: {e}")
     
+    async def check_calendar_1hour_reminders(self):
+        """Check for calendar events starting in exactly 1 hour and notify."""
+        now_bkk = datetime.now(BANGKOK_TZ)
+        target_time = now_bkk + timedelta(hours=1)
+        
+        # Look for events starting in the next 2 minutes of the target window
+        start_range = target_time.replace(second=0, microsecond=0)
+        end_range = start_range + timedelta(minutes=2)
+        
+        try:
+            # Query calendar_events
+            result = supabase.table("calendar_events") \
+                .select("*, users!inner(line_user_id)") \
+                .gte("start_time", start_range.isoformat()) \
+                .lt("start_time", end_range.isoformat()) \
+                .execute()
+            
+            for event in (result.data or []):
+                event_id = event.get("id")
+                line_user_id = event.get("users", {}).get("line_user_id")
+                if line_user_id:
+                    title = event.get("title", "นัดหมาย")
+                    start_dt = datetime.fromisoformat(event.get("start_time").replace("Z", "+00:00")).astimezone(BANGKOK_TZ)
+                    time_str = start_dt.strftime("%H:%M")
+                    
+                    msg = f"🔔 เตือนความจำ: อีก 1 ชั่วโมงคุณมีนัดหมาย\n\n🗓️ {title}\n⏰ เวลา {time_str} น."
+                    push_message(line_user_id, msg)
+                    logger.info(f"[SCHEDULER] Sent 1h calendar notification for event {event_id}")
+                    
+        except Exception as e:
+            logger.error(f"[SCHEDULER] Error checking calendar 1h reminders: {e}")
+
+    async def check_and_run_calendar_sync(self):
+        """Periodically sync external calendars for all users."""
+        if not hasattr(self, "_last_sync_time"):
+            self._last_sync_time = datetime.min
+            
+        now = datetime.now()
+        if (now - self._last_sync_time).total_seconds() < 1800: # 30 minutes
+            return
+            
+        self._last_sync_time = now
+        logger.info("[SCHEDULER] Starting periodic calendar sync")
+        
+        try:
+            users_res = supabase.table("users").select("*").eq("calendar_sync_enabled", True).execute()
+            for user in (users_res.data or []):
+                user_id = user.get("id")
+                line_user_id = user.get("line_user_id")
+                
+                if user.get("google_refresh_token"):
+                    await calendar_sync_service.sync_google_calendar(user_id, line_user_id)
+        except Exception as e:
+            logger.error(f"[SCHEDULER] Error during periodic calendar sync: {e}")
+
     async def check_due_reminders(self):
         """Check and send due reminders."""
         try:

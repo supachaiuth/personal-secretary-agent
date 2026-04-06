@@ -20,7 +20,12 @@ user_repo = UserRepository()
 activity_repo = ActivityRepository()
 
 import logging
+import os
+from app.config import Settings
+from app.services.calendar_sync_service import calendar_sync_service
 logger = logging.getLogger(__name__)
+
+_settings = Settings()
 
 
 # Legacy intent-based responses (fallback)
@@ -643,6 +648,75 @@ def get_response_for_action(
     if action == "calendar_query":
         return f"{user_name}ขอโทษครับ ยังไม่สามารถดูตารางนัดหมายได้ในตอนนี้", True
     
+    # ===== connect_calendar =====
+    if action == "connect_calendar":
+        if not line_user_id:
+            return "ขอโทษครับ ไม่สามารถระบุตัวตนของคุณได้ กรุณาลองใหม่อีกครั้ง", True
+            
+        base_url = os.getenv("BASE_URL", "http://localhost:8000")
+        auth_url = f"{base_url}/auth/google/login?line_user_id={line_user_id}"
+        
+        flex_msg = _get_calendar_connect_flex(auth_url)
+        return flex_msg, True
+
+    # ===== create_calendar_event =====
+    if action == "create_calendar_event":
+        # Similar logic to create_reminder but with calendar focus
+        from app.services.reminder_service import is_valid_reminder
+        
+        validation_error = extracted_fields.get("validation_error")
+        if validation_error:
+            return f"❌ เวลาไม่ถูกต้อง กรุณาระบุเวลาใหม่นะครับ", False
+            
+        message = extracted_fields.get("message", "").strip()
+        remind_at = extracted_fields.get("remind_at")
+        has_time = extracted_fields.get("has_time", False)
+        
+        if not message or len(message) < 2:
+            return "ต้องการให้นัดหมายเรื่องอะไรครับ?", False
+            
+        if not has_time or not remind_at:
+            return "นัดหมายตอนกี่โมงครับ?", False
+            
+        if _is_remind_at_in_past(remind_at):
+            return "❌ เวลานัดหมายนั้นผ่านมาแล้วครับ รบกวนระบุเวลาใหม่นะครับ", False
+            
+        # 1. Save to Reminders (for LINE notifications)
+        try:
+            # Check for duplicate
+            existing = reminder_repo.find_duplicate(user_id, message, remind_at)
+            if not existing:
+                reminder_repo.create(user_id, message, remind_at)
+                activity_repo.log_activity(user_id, "reminder_created", {"message": message, "remind_at": remind_at, "is_calendar": True})
+            
+            formatted_time = _format_thai_datetime(remind_at)
+            
+            # 2. Check for Google Calendar connection
+            user_data = user_repo.get_by_line_user_id(line_user_id).data[0]
+            if user_data.get("google_refresh_token"):
+                # Actual Google Calendar API call
+                try:
+                    # Map Thai-calculated remind_at to Google start_time
+                    # (remind_at is already ISO formatted)
+                    calendar_sync_service.create_google_event(
+                        line_user_id=line_user_id,
+                        title=message,
+                        start_time=remind_at
+                    )
+                    return f"✅ บันทึกนัดหมาย '{message}' {formatted_time} เรียบร้อยครับ (และเพิ่มลง Google Calendar ให้แล้ว 🗓️)", True
+                except Exception as g_err:
+                    logger.error(f"[GoogleCalendar] Error creating event: {g_err}")
+                    return f"✅ บันทึกนัดหมาย '{message}' {formatted_time} เรียบร้อยครับ (แต่พบปัญหาในการเพิ่มลง Google Calendar)", True
+            else:
+                return (
+                    f"✅ บันทึกนัดหมาย '{message}' {formatted_time} เรียบร้อยครับ\n\n"
+                    "💡 ปล. คุณยังไม่ได้เชื่อมต่อ Google Calendar ถ้าสนใจพิมพ์ 'เชื่อมต่อปฏิทิน' ได้นะครับ"
+                ), True
+                
+        except Exception as e:
+            logger.error(f"[ResponseHandler] Error creating calendar event: {e}")
+            return "❌ เกิดข้อผิดพลาดในการบันทึกนัดหมายครับ", False
+
     # ===== cancel_reminder =====
     if action == "cancel_reminder":
         keyword = extracted_fields.get("keyword", "")
@@ -763,3 +837,112 @@ def get_clarification_question(intent: str, default_message: str = "") -> str:
         return default_message
     
     return "ขอรายละเอียดเพิ่มเติมได้ไหมครับ?"
+
+
+def _get_calendar_connect_flex(auth_url: str) -> dict:
+    """Generate a premium Flex Message for Google Calendar connection."""
+    return {
+        "type": "bubble",
+        "hero": {
+            "type": "image",
+            "url": "https://www.gstatic.com/calendar/images/dynamiclogo_2020q4/calendar_31_2x.png",
+            "size": "full",
+            "aspectRatio": "20:13",
+            "aspectMode": "cover",
+            "action": {
+                "type": "uri",
+                "uri": auth_url
+            }
+        },
+        "body": {
+            "type": "box",
+            "layout": "vertical",
+            "contents": [
+                {
+                    "type": "text",
+                    "text": "เชื่อมต่อ Google Calendar",
+                    "weight": "bold",
+                    "size": "xl"
+                },
+                {
+                    "type": "text",
+                    "text": "ให้ผมช่วยดูแลนัดหมายของคุณให้ง่ายขึ้น",
+                    "size": "sm",
+                    "color": "#8c8c8c",
+                    "wrap": True,
+                    "margin": "md"
+                },
+                {
+                    "type": "box",
+                    "layout": "vertical",
+                    "margin": "lg",
+                    "spacing": "sm",
+                    "contents": [
+                        {
+                            "type": "box",
+                            "layout": "baseline",
+                            "spacing": "sm",
+                            "contents": [
+                                {
+                                    "type": "text",
+                                    "text": "•",
+                                    "color": "#aaaaaa",
+                                    "size": "sm",
+                                    "flex": 1
+                                },
+                                {
+                                    "type": "text",
+                                    "text": "แจ้งเตือนล่วงหน้า 1 ชั่วโมง",
+                                    "wrap": True,
+                                    "color": "#666666",
+                                    "size": "sm",
+                                    "flex": 5
+                                }
+                            ]
+                        },
+                        {
+                            "type": "box",
+                            "layout": "baseline",
+                            "spacing": "sm",
+                            "contents": [
+                                {
+                                    "type": "text",
+                                    "text": "•",
+                                    "color": "#aaaaaa",
+                                    "size": "sm",
+                                    "flex": 1
+                                },
+                                {
+                                    "type": "text",
+                                    "text": "เพิ่มนัดหมายผ่านแชทได้ทันที",
+                                    "wrap": True,
+                                    "color": "#666666",
+                                    "size": "sm",
+                                    "flex": 5
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        },
+        "footer": {
+            "type": "box",
+            "layout": "vertical",
+            "spacing": "sm",
+            "contents": [
+                {
+                    "type": "button",
+                    "style": "primary",
+                    "height": "sm",
+                    "color": "#4285F4",
+                    "action": {
+                        "type": "uri",
+                        "label": "เชื่อมต่อเลย",
+                        "uri": auth_url
+                    }
+                }
+            ],
+            "flex": 0
+        }
+    }

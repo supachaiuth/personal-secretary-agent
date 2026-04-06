@@ -55,3 +55,55 @@ def push_message(line_user_id: str, text: str) -> bool:
         return response.status_code == 200
     except Exception:
         return False
+
+
+def reply_flex_message(reply_token: str, alt_text: str, flex_contents: dict) -> bool:
+    """Send a Flex Message as a reply."""
+    if not _settings.line_channel_access_token:
+        return False
+    url = "https://api.line.me/v2/bot/message/reply"
+    headers = {
+        "Authorization": f"Bearer {_settings.line_channel_access_token}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "replyToken": reply_token,
+        "messages": [
+            {
+                "type": "flex",
+                "altText": alt_text,
+                "contents": flex_contents
+            }
+        ]
+    }
+    try:
+        response = httpx.post(url, json=payload, headers=headers, timeout=10)
+        return response.status_code == 200
+    except Exception:
+        return False
+
+
+def push_flex_message(line_user_id: str, alt_text: str, flex_contents: dict) -> bool:
+    """Push a Flex Message to a user."""
+    if not _settings.line_channel_access_token:
+        return False
+    url = "https://api.line.me/v2/bot/message/push"
+    headers = {
+        "Authorization": f"Bearer {_settings.line_channel_access_token}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "to": line_user_id,
+        "messages": [
+            {
+                "type": "flex",
+                "altText": alt_text,
+                "contents": flex_contents
+            }
+        ]
+    }
+    try:
+        response = httpx.post(url, json=payload, headers=headers, timeout=10)
+        return response.status_code == 200
+    except Exception:
+        return False
