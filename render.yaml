@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: personal-secretary-agent
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SUPABASE_URL
+      - key: SUPABASE_KEY
+      - key: LINE_CHANNEL_SECRET
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+      - key: LLM_PROVIDER
+        value: openai
+      - key: OPENAI_API_KEY
+      - key: OPENAI_MODEL
+        value: gpt-4o # Recommended to use gpt-4o for performance
+      - key: GOOGLE_CLIENT_ID
+      - key: GOOGLE_CLIENT_SECRET
+      - key: GOOGLE_REDIRECT_URI
+      - key: BASE_URL # Your Render URL (e.g., https://your-app.onrender.com)
