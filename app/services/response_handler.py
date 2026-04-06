@@ -417,18 +417,40 @@ def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: 
         if due_date_str:
             try:
                 due_dt = datetime.fromisoformat(due_date_str.replace("Z", "+00:00")).astimezone(bangkok_tz)
-                target_date = date_start.date()
+                target_date_obj = date_start.date()
                 due_date = due_dt.date()
-                if target_date == due_date:
+                if target_date_obj == due_date:
                     timed_items.append({
                         "minutes": due_dt.hour * 60 + due_dt.minute if due_dt.hour else 1440,
                         "time_str": due_dt.strftime("%H:%M") if due_dt.hour else "กำหนด",
                         "message": task.get("title", ""),
                         "type": "task"
                     })
-                    logger.info(f"[Agenda] matched task: {due_dt.date()} == {target_date}, time={due_dt.strftime('%H:%M')}")
+                    logger.info(f"[Agenda] matched task: {due_dt.date()} == {target_date_obj}, time={due_dt.strftime('%H:%M')}")
             except Exception as e:
                 logger.warning(f"[Agenda] task parse error: {e}")
+    
+    # 3. Calendar Events from Google/Apple
+    logger.info(f"[Agenda] calendar_events query start")
+    cal_result = supabase.table("calendar_events").select("*").eq("user_id", user_id).gte("start_time", date_start.isoformat()).lte("start_time", date_end.isoformat()).execute()
+    calendar_events = cal_result.data or []
+    logger.info(f"[Agenda] calendar events fetched: {len(calendar_events)}")
+    
+    for event in calendar_events:
+        start_time_str = event.get("start_time", "")
+        if start_time_str:
+            try:
+                start_dt = datetime.fromisoformat(start_time_str.replace("Z", "+00:00")).astimezone(bangkok_tz)
+                minutes = start_dt.hour * 60 + start_dt.minute
+                timed_items.append({
+                    "minutes": minutes,
+                    "time_str": start_dt.strftime("%H:%M"),
+                    "message": f"🗓️ {event.get('title', '')}",
+                    "type": "calendar"
+                })
+                logger.info(f"[Agenda] matched calendar event: {start_dt.date()} == {date_start.date()}, time={start_dt.strftime('%H:%M')}")
+            except Exception as e:
+                logger.warning(f"[Agenda] calendar event parse error: {e}")
     
     timed_items.sort(key=lambda x: x["minutes"])
     
@@ -454,7 +476,7 @@ def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: 
     return "\n".join(lines)
 
 
-def get_response_for_action(
+async def get_response_for_action(
     action: str,
     extracted_fields: Dict[str, Any],
     user_id: Optional[str],
@@ -646,7 +668,37 @@ def get_response_for_action(
     
     # ===== calendar_query =====
     if action == "calendar_query":
-        return f"{user_name}ขอโทษครับ ยังไม่สามารถดูตารางนัดหมายได้ในตอนนี้", True
+        # Simply reuse the agenda builder but focused on today/tomorrow
+        query_text = extracted_fields.get("query", "").lower()
+        target = "today"
+        if "พรุ่งนี้" in query_text:
+            target = "tomorrow"
+        
+        agenda = _build_agenda_response(user_id, user_name, target)
+        
+        # Add a little hint if not connected
+        user_data_res = user_repo.get_by_line_user_id(line_user_id)
+        if user_data_res.data and not user_data_res.data[0].get("google_refresh_token"):
+            agenda += "\n\n💡 ปล. คุณยังไม่ได้เชื่อมปฏิทิน Google ถ้าต้องการพิมพ์ 'เชื่อมต่อปฏิทิน' นะครับ"
+            
+        return agenda, True
+    
+    # ===== sync_calendar =====
+    if action == "sync_calendar":
+        if not line_user_id or not user_id:
+            return "ขอโทษครับ ไม่สามารถระบุตัวตนได้", True
+            
+        # Check if connected first
+        user_data_res = user_repo.get_by_line_user_id(line_user_id)
+        if not user_data_res.data or not user_data_res.data[0].get("google_refresh_token"):
+            return "คุณยังไม่ได้เชื่อมต่อ Google Calendar ครับ พิมพ์ 'เชื่อมต่อปฏิทิน' เพื่อเริ่มขั้นตอนการเชื่อมต่อได้เลย", True
+
+        # Trigger sync
+        success = await calendar_sync_service.sync_google_calendar(user_id, line_user_id)
+        if success:
+            return "✅ ซิงค์ข้อมูลจาก Google Calendar เรียบร้อยแล้วครับ! ตอนนี้ตารางของคุณเป็นปัจจุบันแล้ว", True
+        else:
+            return "❌ พบปัญหาในการซิงค์ข้อมูล กรุณาลองใหม่อีกครั้งในภายหลังครับ", True
     
     # ===== connect_calendar =====
     if action == "connect_calendar":

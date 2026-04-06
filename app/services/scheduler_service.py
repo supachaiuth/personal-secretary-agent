@@ -605,11 +605,16 @@ class ProactiveScheduler:
         today_reminders = deduplicate_reminders(filter_valid_reminders(today_reminders))
         logger.info(f"[Morning Summary] Valid reminders for user {user_id}: {len(today_reminders)}")
         
+        # NEW: Fetch today's calendar events
+        calendar_result = supabase.table("calendar_events").select("*").eq("user_id", user_id).gte("start_time", today_start.isoformat()).lt("start_time", today_end.isoformat()).execute()
+        today_events = calendar_result.data or []
+        logger.info(f"[Morning Summary] Calendar events for user {user_id}: {len(today_events)}")
+        
         memories = self._get_smart_memories(user_id)
         
         parking_mem = self.get_latest_parking_memory(user_id)
         
-        message = self._format_morning_summary(display_name, pending_tasks, today_reminders, memories, parking_mem)
+        message = self._format_morning_summary(display_name, pending_tasks, today_reminders, memories, today_events, parking_mem)
         
         if push_message(line_user_id, message):
             supabase.table("summary_logs").insert({
@@ -870,13 +875,26 @@ class ProactiveScheduler:
         logger.info(f"[SUMMARY] parking_memory_skipped user_id={user_id} reason=no_data_today")
         return None
     
-    def _format_morning_summary(self, display_name: str, tasks: List[Dict], reminders: List[Dict], memories: List[Dict], parking_mem: Optional[Dict] = None) -> str:
+    def _format_morning_summary(self, display_name: str, tasks: List[Dict], reminders: List[Dict], memories: List[Dict], calendar_events: List[Dict] = None, parking_mem: Optional[Dict] = None) -> str:
         """Format morning summary message."""
         from app.services.reminder_service import reminder_service
         
         lines = ["🌅 สรุปเช้านี้", ""]
         
         lines.append("📋 วันนี้:")
+        
+        if calendar_events:
+            lines.append("  🗓️ นัดหมาย:")
+            for event in calendar_events:
+                start_time_str = event.get("start_time", "")
+                time_display = ""
+                if start_time_str:
+                    try:
+                        start_dt = datetime.fromisoformat(start_time_str.replace("Z", "+00:00")).astimezone(BANGKOK_TZ)
+                        time_display = f"{start_dt.strftime('%H:%M')} "
+                    except Exception:
+                        pass
+                lines.append(f"    • {time_display}{event.get('title', '')}")
         
         if tasks:
             task_list = "\n".join([f"  • {t.get('title', '')}" for t in tasks[:5]])

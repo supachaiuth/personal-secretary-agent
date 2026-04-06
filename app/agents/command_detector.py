@@ -85,7 +85,14 @@ CONNECT_CALENDAR_PATTERNS = [
     r"connect.*calendar",
     r"ตั้งค่า.*calendar",
     r"ผูก.*google",
+]
+
+SYNC_CALENDAR_PATTERNS = [
+    r"ซิงค์ปฏิทิน",
+    r"อัปเดตปฏิทิน",
+    r"ซิงค์ข้อมูล",
     r"sync.*calendar",
+    r"refresh.*calendar",
 ]
 
 # Create calendar event patterns
@@ -282,7 +289,17 @@ def _classify_intent_with_priority_v2(message: str) -> Optional[Dict[str, Any]]:
     
     logger.info(f"[IntentV2] raw_input={msg[:50]}")
     
-    # Priority -1: Connect Calendar (Meta-command)
+    # Priority -1: Sync/Connect Calendar (Meta-commands)
+    for pattern in SYNC_CALENDAR_PATTERNS:
+        if re.search(pattern, lower_msg):
+            logger.info(f"[IntentV2] final_intent=sync_calendar reason=pattern_matched")
+            return {
+                "action": "sync_calendar",
+                "extracted_fields": {},
+                "needs_clarification": False,
+                "source": "intent_v2"
+            }
+
     for pattern in CONNECT_CALENDAR_PATTERNS:
         if re.search(pattern, lower_msg):
             logger.info(f"[IntentV2] final_intent=connect_calendar reason=pattern_matched")

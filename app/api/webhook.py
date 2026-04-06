@@ -67,7 +67,7 @@ def get_or_create_user(line_user_id: str) -> dict:
         return {"id": None, "line_user_id": line_user_id, "role": "partner"}
 
 
-def handle_pending_action(
+async def handle_pending_action(
     line_user_id: str,
     user_message: str,
     user_id: str,
@@ -122,7 +122,7 @@ def handle_pending_action(
         logger.info(f"[PendingActionFix] branch_result_action=clarify_intent_continue")
         
         from app.services.response_handler import get_response_for_action
-        response, is_complete = get_response_for_action(
+        response, is_complete = await get_response_for_action(
             action="clarify_intent",
             extracted_fields=merged_fields,
             user_id=user_id,
@@ -303,7 +303,7 @@ def handle_pending_action(
     logger.info(f"[PendingActionFix] branch_entered={branch_entered}")
     
     from app.services.response_handler import get_response_for_action
-    response, is_complete = get_response_for_action(
+    response, is_complete = await get_response_for_action(
         action=pending_action,
         extracted_fields=merged_fields,
         user_id=user_id,
@@ -383,7 +383,7 @@ async def webhook(
             logger.info(f"[Webhook] User: {line_user_id}, Message: {user_message}")
             
             # Step 1: Check for pending action (follow-up)
-            pending_response, _ = handle_pending_action(line_user_id, user_message, user_id, user_role)
+            pending_response, _ = await handle_pending_action(line_user_id, user_message, user_id, user_role)
             
             if pending_response:
                 response_text = pending_response
@@ -403,7 +403,7 @@ async def webhook(
                     logger.info(f"[Webhook] Fields: {extracted_fields}")
                     logger.info(f"[Webhook] Needs clarification: {needs_clarification}")
                     
-                    response_text, is_complete = get_response_for_action(
+                    response_text, is_complete = await get_response_for_action(
                         action=action,
                         extracted_fields=extracted_fields,
                         user_id=user_id,
