@@ -6,7 +6,9 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from google_auth_oauthlib.flow import Flow
 from app.repositories.user_repository import UserRepository
 from app.services.supabase_service import get_supabase
+from app.config import Settings
 
+_settings = Settings()
 logger = logging.getLogger(__name__)
 router = APIRouter()
 user_repo = UserRepository()
@@ -20,7 +22,7 @@ SCOPES = [
 # Redirect URI - must match what is registered in Google Cloud Console
 # For local dev: http://localhost:8000/auth/google/callback
 # For production: https://your-domain.com/auth/google/callback
-REDIRECT_URI = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8000/auth/google/callback")
+REDIRECT_URI = _settings.google_redirect_uri
 
 @router.get("/google/login")
 async def google_login(line_user_id: str):
@@ -30,8 +32,8 @@ async def google_login(line_user_id: str):
     """
     client_config = {
         "web": {
-            "client_id": os.getenv("GOOGLE_CLIENT_ID"),
-            "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+            "client_id": _settings.google_client_id,
+            "client_secret": _settings.google_client_secret,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "redirect_uris": [REDIRECT_URI]
@@ -67,8 +69,8 @@ async def google_callback(
     """
     client_config = {
         "web": {
-            "client_id": os.getenv("GOOGLE_CLIENT_ID"),
-            "client_secret": os.getenv("GOOGLE_CLIENT_SECRET"),
+            "client_id": _settings.google_client_id,
+            "client_secret": _settings.google_client_secret,
             "auth_uri": "https://accounts.google.com/o/oauth2/auth",
             "token_uri": "https://oauth2.googleapis.com/token",
             "redirect_uris": [REDIRECT_URI]

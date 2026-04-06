@@ -8,14 +8,16 @@ from google_auth_oauthlib.flow import Flow
 from googleapiclient.discovery import build
 import icalendar
 from app.services.supabase_service import get_supabase
+from app.config import Settings
 
+_settings = Settings()
 logger = logging.getLogger(__name__)
 
 class CalendarSyncService:
     def __init__(self):
         self.supabase = get_supabase()
-        self.client_id = os.getenv("GOOGLE_CLIENT_ID")
-        self.client_secret = os.getenv("GOOGLE_CLIENT_SECRET")
+        self.client_id = _settings.google_client_id
+        self.client_secret = _settings.google_client_secret
 
     def _get_google_service(self, refresh_token: str):
         """Get an authorized Google Calendar service using a refresh token."""
