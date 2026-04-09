@@ -836,16 +836,21 @@ async def get_response_for_action(
     if action == "cancel_reminder":
         keyword = extracted_fields.get("keyword", "")
         date_filter = extracted_fields.get("date_filter")
-        selected_index = extracted_fields.get("selected_index")
+        user_replied = extracted_fields.get("user_replied", "").strip()
         matches = extracted_fields.get("matches", [])
         
+        # If we have a follow-up reply but no keyword, treat reply as keyword
+        if not keyword and user_replied and not matches:
+            keyword = user_replied
+            logger.info(f"[ResponseHandler] Using user_replied as keyword: {keyword}")
+
         if not user_id:
             return f"{user_name}ขอโทษครับ ไม่สามารถยกเลิกนัดหมายได้ในตอนนี้", False
         
         from app.repositories.reminder_repository import ReminderRepository
         reminder_repo = ReminderRepository()
         
-        # Step 1: Initial search
+        # Step 1: Initial search (if no matches yet)
         if not matches:
             if not keyword:
                 return "ต้องการให้ยกเลิกนัดหมายอะไรครับ?", False

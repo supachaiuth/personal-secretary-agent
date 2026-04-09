@@ -88,6 +88,13 @@ async def handle_pending_action(
     if not pending_action:
         return None, False
     
+    # NEW: Check if this message is a strong new intent (e.g., "See tasks")
+    # if so, break out of the pending flow to let the new command be detected
+    if has_strong_new_intent(user_message):
+        logger.info(f"[PendingActionFix] Strong new intent detected, breaking out of {pending_action}")
+        clear_session(line_user_id)
+        return None, False
+
     existing_collected = session.collected_fields or {}
     
     logger.info(f"[PendingActionFix] ===== PENDING ACTION DETECTED =====")
