@@ -43,19 +43,25 @@ async def google_login(line_user_id: str):
     if not client_config["web"]["client_id"] or not client_config["web"]["client_secret"]:
         raise HTTPException(status_code=500, detail="Google OAuth credentials not configured in .env")
 
-    flow = Flow.from_client_config(
-        client_config,
-        scopes=SCOPES,
-        state=line_user_id
-    )
-    flow.redirect_uri = REDIRECT_URI
+    # 1. Construct authorization URL manually
+    # This ensures no PKCE (code_challenge) parameters are added automatically,
+    # which avoids the "Missing code verifier" error in the callback.
+    import urllib.parse
     
-    authorization_url, _ = flow.authorization_url(
-        access_type='offline',
-        include_granted_scopes='true',
-        prompt='consent' # Force consent to ensure we always get a refresh_token
-    )
+    params = {
+        "client_id": _settings.google_client_id,
+        "redirect_uri": REDIRECT_URI,
+        "response_type": "code",
+        "scope": " ".join(SCOPES),
+        "state": line_user_id,
+        "access_type": "offline",
+        "prompt": "consent",
+        "include_granted_scopes": "true"
+    }
     
+    authorization_url = f"https://accounts.google.com/o/oauth2/auth?{urllib.parse.urlencode(params)}"
+    
+    logger.info(f"Initiating Google OAuth for user: {line_user_id}")
     return RedirectResponse(authorization_url)
 
 @router.get("/google/callback")
