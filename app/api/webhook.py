@@ -411,21 +411,20 @@ async def webhook(
                         user_role=user_role
                     )
                     
-                    # CRITICAL: Only update session if needs clarification (not one-shot)
+                    # session management: update if not complete
                     if is_complete:
                         clear_session(line_user_id)
                         logger.info(f"[Webhook] Complete - session cleared")
-                    elif needs_clarification:
-                        # Only set pending if we actually need more info
+                    else:
+                        # If not complete (waiting for confirmation or follow-up), set as pending
                         update_session(
                             line_user_id,
                             pending_action=action,
-                            needs_clarification=True,
+                            needs_clarification=True, # Mark that we need follow-up
                             user_message=user_message,
                             collected_fields=extracted_fields
                         )
                         logger.info(f"[Webhook] Pending - session updated with action: {action}")
-                    # else: one-shot complete but not saved - don't set pending
                     
                     logger.info(f"[Webhook] Response: {str(response_text)[:50] if response_text else 'None'}...")
                     
