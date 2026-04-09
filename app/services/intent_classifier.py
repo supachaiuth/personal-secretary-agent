@@ -25,20 +25,25 @@ INTENTS = [
     "create_reminder",
     "list_tasks",
     "list_pantry",
+    "connect_calendar",
+    "sync_calendar",
+    "agenda_query",
     "chat"
 ]
 
 SYSTEM_PROMPT = """Classify this Thai message into ONE of these intents:
 - add_task (เพิ่มงาน, จดงาน, ภารกิจ, todo, ต้องทำ, ลิสต์)
-- add_pantry (ซื้อของ, เพิ่มของ, ของกิน, ของในตู้เย็น, ครัว, มีอะไรในตู้เย็นบ้าง)
+- add_pantry (ซื้อของ, เพิ่มของ, ของกิน, ของในตู้เย็น, ครัว)
 - create_reminder (เน้นคำว่า: เตือน, แจ้งเตือน, อย่าลืม, ช่วยเตือน, ปลุก)
 - list_tasks (ดูงาน, รายการงาน, มีงานอะไรบ้าง)
-- list_pantry (ดูตู้เย็น, ของหมดอายุ)
+- list_pantry (ดูตู้เย็น, ของหมดอายุ, ของในตู้เย็นมีอะไรบ้าง)
+- connect_calendar (เชื่อมต่อปฏิทิน, ต่อ Google Calendar, ผูกบัญชีปฏิทิน)
+- sync_calendar (ซิงค์ปฏิทิน, อัปเดตข้อมูลปฏิทิน, ถึงนัดหมายจาก Google)
+- agenda_query (ดูตารางวันนี้, พรุ่งนี้มีนัดอะไรบ้าง, สรุปงานวันนี้, มีประชุมอะไรบ้าง)
 - chat (คำถามทั่วไปที่ไม่เกี่ยวกับเลขา, คุยเล่น, ทักทาย, ถามเวลาที่อื่นๆ, ถามความรู้ทั่วไป)
 
 Respond with ONLY the intent word, nothing else.
-Example: add_task
-Note: If the message is just asking about time/date (e.g. กี่โมงแล้ว, วันที่เท่าไหร่) without a 'remind' action, classify as 'chat'."""
+Example: add_task"""
 
 
 def _get_cache_key(message: str) -> str:

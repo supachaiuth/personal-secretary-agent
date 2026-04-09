@@ -90,23 +90,24 @@ AGENDA_QUERY_PATTERNS = [
 
 # Connect calendar patterns
 CONNECT_CALENDAR_PATTERNS = [
-    r"เชื่อมต่อปฏิทิน",
-    r"เชื่อมปฏิทิน",
+    r"เชื่อมต่อป[ฏฎ]ิทิน",
+    r"เชื่อมป[ฏฎ]ิทิน",
     r"เชื่อมปติทิน",
     r"ต่อปติทิน",
-    r"ตั้งค่าปฏิทิน",
+    r"ตั้งค่าป[ฏฎ]ิทิน",
     r"connect.*calendar",
     r"setup.*calendar",
     r"ตั้งค่า.*calendar",
     r"ผูก.*google",
     r"เชื่อมต่อ.*google",
-]
+    r"google.*calendar", # Standalone google calendar (likely for connection)
+],
 
 SYNC_CALENDAR_PATTERNS = [
-    r"ซิงค์ปฏิทิน",
-    r"ซิ้งปฏิทิน",
-    r"อัปเดตปฏิทิน",
-    r"ดึงข้อมูลปฏิทิน",
+    r"ซิงค์ป[ฏฎ]ิทิน",
+    r"ซิ้งป[ฏฎ]ิทิน",
+    r"อัปเดตป[ฏฎ]ิทิน",
+    r"ดึงข้อมูลป[ฏฎ]ิทิน",
     r"ดึงนัดหมาย",
     r"อัปเดตนัดหมาย",
     r"ซิงค์ข้อมูล",
@@ -124,7 +125,7 @@ CREATE_CALENDAR_EVENT_PATTERNS = [
     r"นัดหมาย",
     r"มีนัด",
     r"จองตัว",
-    r"เพิ่มลงปฏิทิน",
+    r"เพิ่มลงป[ฏฎ]ิทิน",
     r"add.*calendar",
     r"create.*event",
 ]
