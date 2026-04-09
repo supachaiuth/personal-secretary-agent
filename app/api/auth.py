@@ -85,19 +85,39 @@ async def google_callback(
     flow.redirect_uri = REDIRECT_URI
     
     try:
-        # Exchange auth code for tokens
-        flow.fetch_token(code=code)
-        credentials = flow.credentials
+        # 1. Exchange auth code for tokens using direct POST to Google
+        # This avoids PKCE "Missing code verifier" issues in stateless environments
+        import httpx
         
-        refresh_token = credentials.refresh_token
+        token_url = "https://oauth2.googleapis.com/token"
+        data = {
+            "code": code,
+            "client_id": _settings.google_client_id,
+            "client_secret": _settings.google_client_secret,
+            "redirect_uri": REDIRECT_URI,
+            "grant_type": "authorization_code",
+        }
+        
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(token_url, data=data)
+            tokens = resp.json()
+            
+        if "error" in tokens:
+            logger.error(f"Google Token Error: {tokens}")
+            return JSONResponse(
+                status_code=400,
+                content={"message": f"Error: {tokens.get('error_description', tokens.get('error'))}"}
+            )
+            
+        refresh_token = tokens.get("refresh_token")
         
         if not refresh_token:
             # If no refresh token, it might be because the user already authorized
-            # and we didn't force consent. But we did prompt='consent'.
-            logger.warning(f"No refresh token returned for user {state}. Prompting re-auth might be needed.")
-            # Still, we can proceed if we have access token, but refresh is better for long-term.
+            # and we didn't force consent. 
+            logger.warning(f"No refresh token returned for user {state}. Tokens received: {list(tokens.keys())}")
+            # Proceeding anyway as we might have an access token, but long-term needs refresh token.
         
-        # Save refresh token to Supabase users table
+        # 2. Save refresh token to Supabase users table
         supabase = get_supabase()
         update_data = {
             "google_refresh_token": refresh_token,
