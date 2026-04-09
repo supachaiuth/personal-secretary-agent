@@ -130,7 +130,7 @@ async def handle_pending_action(
             user_role=user_role
         )
         
-        logger.info(f"[PendingActionFix] clarify_intent_response={response[:50] if response else 'None'}")
+        logger.info(f"[PendingActionFix] clarify_intent_response={str(response)[:50] if response else 'None'}")
         logger.info(f"[PendingActionFix] is_complete={is_complete}")
         
         if is_complete:
@@ -311,7 +311,7 @@ async def handle_pending_action(
         user_role=user_role
     )
     
-    logger.info(f"[PendingActionFix] response={response[:50] if response else 'None'}")
+    logger.info(f"[PendingActionFix] response={str(response)[:50] if response else 'None'}")
     logger.info(f"[PendingActionFix] is_complete={is_complete}")
     
     if is_complete:
@@ -387,7 +387,7 @@ async def webhook(
             
             if pending_response:
                 response_text = pending_response
-                logger.info(f"[Webhook] Using pending action response: {response_text[:50]}")
+                logger.info(f"[Webhook] Using pending action response: {str(response_text)[:50]}")
             else:
                 # Step 2: Try explicit command detection
                 command_result = detect_command(user_message)
@@ -427,7 +427,7 @@ async def webhook(
                         logger.info(f"[Webhook] Pending - session updated with action: {action}")
                     # else: one-shot complete but not saved - don't set pending
                     
-                    logger.info(f"[Webhook] Response: {response_text[:50] if response_text else 'None'}...")
+                    logger.info(f"[Webhook] Response: {str(response_text)[:50] if response_text else 'None'}...")
                     
                 else:
                     # ===== DUAL MODE: Assistant Chat Mode =====
