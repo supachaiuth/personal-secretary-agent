@@ -448,8 +448,8 @@ async def webhook(
                             user_role=user_role
                         )
                         
-                        if not response_text or "ขอโทษ" in response_text:
-                            logger.error(f"[Webhook] Chat returned error/empty: {response_text}")
+                        if not response_text:
+                            logger.error(f"[Webhook] Chat returned empty response")
                             response_text = "มีอะไรให้ช่วยไหมครับ?"
                         
                         logger.info(f"[Webhook] Chat response: {response_text[:80]}...")
