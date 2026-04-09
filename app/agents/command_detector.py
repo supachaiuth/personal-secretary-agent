@@ -354,9 +354,16 @@ def _classify_intent_with_priority_v2(message: str) -> Optional[Dict[str, Any]]:
     for kw in CANCEL_REMINDER_KEYWORDS:
         if kw in lower_msg:
             # Extract keyword (what to cancel) and optional date
-            keyword = re.sub(r'|'.join(re.escape(k) for k in CANCEL_REMINDER_KEYWORDS), '', lower_msg).strip()
-            keyword = re.sub(r'\s+(พรุ่งนี้|วันนี้|มะรืนนี้|วันพรุ่งนี้)\s*', ' ', keyword).strip()
+            # CRITICAL: Sort keywords by length descending so longest match is stripped first
+            # e.g. "ยกเลิกนัดหมาย" must be stripped before "ยกเลิกนัด"
+            sorted_keywords = sorted(CANCEL_REMINDER_KEYWORDS, key=len, reverse=True)
+            keyword = re.sub(r'|'.join(re.escape(k) for k in sorted_keywords), '', lower_msg).strip()
+            keyword = re.sub(r'(พรุ่งนี้|วันนี้|มะรืนนี้|วันพรุ่งนี้)', '', keyword).strip()
+            # Strip time expressions so we can search by title
+            keyword = re.sub(r'\d{1,2}\s*(โมง|ทุ่ม|น\.|นาฬิกา)', '', keyword).strip()
+            keyword = re.sub(r'ตอน\s*', '', keyword).strip()
             keyword = re.sub(r'ครับ|ค่ะ|นะ|หน่อย|ด้วย', '', keyword).strip()
+            keyword = re.sub(r'\s+', ' ', keyword).strip()
             
             date_filter = None
             if "พรุ่งนี้" in lower_msg or "วันพรุ่ง" in lower_msg:

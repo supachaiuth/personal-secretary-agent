@@ -767,8 +767,11 @@ async def get_response_for_action(
             
         base_url = os.getenv("BASE_URL", "http://localhost:8000")
         auth_url = f"{base_url}/auth/google/login?line_user_id={line_user_id}"
+        # CRITICAL: Add openExternalBrowser=1 so LINE opens in external browser
+        # Google blocks OAuth from in-app WebViews (Error 403: disallowed_useragent)
+        external_auth_url = f"{auth_url}&openExternalBrowser=1"
         
-        flex_msg = _get_calendar_connect_flex(auth_url)
+        flex_msg = _get_calendar_connect_flex(external_auth_url)
         return flex_msg, True
 
     # ===== create_calendar_event =====
