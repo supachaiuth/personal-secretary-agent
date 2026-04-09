@@ -101,7 +101,7 @@ CONNECT_CALENDAR_PATTERNS = [
     r"ผูก.*google",
     r"เชื่อมต่อ.*google",
     r"google.*calendar", # Standalone google calendar (likely for connection)
-],
+]
 
 SYNC_CALENDAR_PATTERNS = [
     r"ซิงค์ป[ฏฎ]ิทิน",
