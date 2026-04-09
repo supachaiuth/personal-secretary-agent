@@ -348,7 +348,7 @@ def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: 
     if not user_id:
         return f"{user_name}ขอโทษครับ ไม่สามารถดูรายการได้ในตอนนี้"
     
-    from datetime import timedelta, timezone
+    from datetime import timedelta, timezone, date
     from app.services.supabase_service import get_supabase
     
     supabase = get_supabase()
@@ -392,6 +392,30 @@ def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: 
         date_start = datetime.combine(now.date(), datetime.min.time(), tzinfo=bangkok_tz)
         end_date = now.replace(month=12, day=31).date()
         date_end = datetime.combine(end_date, datetime.max.time(), tzinfo=bangkok_tz)
+    elif isinstance(target_date, str) and target_date.startswith("range_month_"):
+        try:
+            month_num = int(target_date.split("_")[-1])
+            import calendar
+            # Determine year (use next year if month has passed this year)
+            target_year = now.year
+            if month_num < now.month:
+                target_year += 1
+            
+            # Month label
+            month_names_th = ["", "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"]
+            date_label = f"เดือน{month_names_th[month_num]}"
+            if target_year != now.year:
+                date_label += f" {target_year + 543}" # Thai Year
+            
+            last_day = calendar.monthrange(target_year, month_num)[1]
+            date_start = datetime.combine(date(target_year, month_num, 1), datetime.min.time(), tzinfo=bangkok_tz)
+            date_end = datetime.combine(date(target_year, month_num, last_day), datetime.max.time(), tzinfo=bangkok_tz)
+        except Exception as e:
+            logger.error(f"[Agenda] Error parsing range_month: {e}")
+            agenda_date = now.date()
+            date_label = "วันนี้"
+            date_start = datetime.combine(agenda_date, datetime.min.time(), tzinfo=bangkok_tz)
+            date_end = datetime.combine(agenda_date, datetime.max.time(), tzinfo=bangkok_tz)
     else:
         try:
             from datetime import date as date_type
@@ -697,13 +721,18 @@ async def get_response_for_action(
     if action == "calendar_query":
         # Simply reuse the agenda builder but focused on today/tomorrow or detected range
         target = extracted_fields.get("date", "today")
-        # Legacy support for query text if date not found
-        if not extracted_fields.get("date"):
+        
+        # Priority: explicit date target from CommandDetector
+        if not target or target == "today":
             query_text = extracted_fields.get("query", "").lower()
             if "พรุ่งนี้" in query_text:
                 target = "tomorrow"
             elif any(kw in query_text for kw in ["อาทิตย์", "สัปดาห์", "วีค"]):
                 target = "this_week"
+            elif any(kw in query_text for kw in ["เดือนนี้", "this month"]):
+                target = "this_month"
+            elif any(kw in query_text for kw in ["ปีนี้", "this year"]):
+                target = "this_year"
         
         agenda = _build_agenda_response(user_id, user_name, target)
         

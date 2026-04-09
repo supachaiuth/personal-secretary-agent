@@ -274,12 +274,31 @@ def _get_pantry_keywords_found(message: str) -> list[str]:
 
 
 def _has_agenda_query_pattern(message: str) -> bool:
-    """Check if message matches agenda/list query patterns."""
+    """Check if message matches agenda/list query patterns or ranges."""
     lower_msg = message.lower()
+    
+    # 1. Explicit query patterns (e.g., "ดูตาราง", "มีอะไรบ้าง")
     for pattern in AGENDA_QUERY_PATTERNS:
         if re.search(pattern, lower_msg):
             logger.info(f"[IntentV2] matched_query_pattern={pattern}")
             return True
+            
+    # 2. Standalone month names or ranges (e.g., "เดือนสิงหา", "August", "เดือน 8")
+    # This specifically detects queries like "เดือนสิงหามีนัดอะไรบ้าง"
+    if "เดือน" in lower_msg or any(month in lower_msg for month in ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]):
+        from app.services.reminder_service import MONTH_NAMES
+        for month_name in MONTH_NAMES.keys():
+            # Check if month name exists and is not just part of a larger date (like "5 เมษา")
+            # We look for queries about the month itself
+            if month_name in lower_msg:
+                # If it's just the month name or specifically says "เดือน X", it's likely a query
+                logger.info(f"[IntentV2] matched_month_query={month_name}")
+                return True
+                
+    # 3. Year queries
+    if "ปีนี้" in lower_msg or "this year" in lower_msg:
+        return True
+        
     return False
 
 
@@ -374,10 +393,26 @@ def _classify_intent_with_priority_v2(message: str) -> Optional[Dict[str, Any]]:
         elif any(kw in lower_msg for kw in ["ปีนี้", "this year"]):
             target_date = "this_year"
         else:
+            # Detect specific months (e.g., "เดือนสิงหา", "เดือน 8", "August")
             from app.services.reminder_service import reminder_service
             specific_date = reminder_service._parse_specific_date(msg)
             if specific_date:
                 target_date = specific_date
+            else:
+                # Check for standalone month names or "เดือน X"
+                # This handles cases like "เดือนสิงหามีนัดอะไรบ้าง"
+                month_match = re.search(r'เดือน\s*(\d{1,2})', lower_msg)
+                if month_match:
+                    month_num = int(month_match.group(1))
+                    if 1 <= month_num <= 12:
+                        target_date = f"range_month_{month_num}"
+                else:
+                    # Check Thai/English month names in the message
+                    from app.services.reminder_service import MONTH_NAMES
+                    for month_name, month_num in sorted(MONTH_NAMES.items(), key=lambda x: -len(x[0])):
+                        if month_name in lower_msg:
+                            target_date = f"range_month_{month_num}"
+                            break
                 
         logger.info(f"[IntentV2] final_intent=agenda_query reason=query_pattern_matched date={target_date}")
         return {
