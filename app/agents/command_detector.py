@@ -77,21 +77,41 @@ AGENDA_QUERY_PATTERNS = [
     r"พรุ่งนี้.*ต้องทำ",
     r"พรุ่งนี้.*มี",
     r"ฉันต้องทำอะไร",
+    r"อาทิตย์นี้.*มี",
+    r"สัปดาห์นี้.*มี",
+    r"วีคนี้.*มี",
+    r"สัปดาห์นี้.*งาน",
+    r"เดือนนี้.*มี",
+    r"ปีนี้.*มี",
+    r"this week",
+    r"this month",
+    r"this year",
 ]
 
 # Connect calendar patterns
 CONNECT_CALENDAR_PATTERNS = [
     r"เชื่อมต่อปฏิทิน",
+    r"เชื่อมปฏิทิน",
+    r"เชื่อมปติทิน",
+    r"ต่อปติทิน",
+    r"ตั้งค่าปฏิทิน",
     r"connect.*calendar",
+    r"setup.*calendar",
     r"ตั้งค่า.*calendar",
     r"ผูก.*google",
+    r"เชื่อมต่อ.*google",
 ]
 
 SYNC_CALENDAR_PATTERNS = [
     r"ซิงค์ปฏิทิน",
+    r"ซิ้งปฏิทิน",
     r"อัปเดตปฏิทิน",
+    r"ดึงข้อมูลปฏิทิน",
+    r"ดึงนัดหมาย",
+    r"อัปเดตนัดหมาย",
     r"ซิงค์ข้อมูล",
     r"sync.*calendar",
+    r"sync.*google",
     r"refresh.*calendar",
 ]
 
@@ -347,6 +367,12 @@ def _classify_intent_with_priority_v2(message: str) -> Optional[Dict[str, Any]]:
             target_date = "tomorrow"
         elif "มะรืนนี้" in lower_msg:
             target_date = "day_after_tomorrow"
+        elif any(kw in lower_msg for kw in ["อาทิตย์นี้", "สัปดาห์นี้", "วีคนี้", "this week"]):
+            target_date = "this_week"
+        elif any(kw in lower_msg for kw in ["เดือนนี้", "this month"]):
+            target_date = "this_month"
+        elif any(kw in lower_msg for kw in ["ปีนี้", "this year"]):
+            target_date = "this_year"
         else:
             from app.services.reminder_service import reminder_service
             specific_date = reminder_service._parse_specific_date(msg)

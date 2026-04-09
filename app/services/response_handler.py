@@ -360,23 +360,50 @@ def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: 
     if target_date == "tomorrow":
         agenda_date = (now + timedelta(days=1)).date()
         date_label = "พรุ่งนี้"
+        date_start = datetime.combine(agenda_date, datetime.min.time(), tzinfo=bangkok_tz)
+        date_end = datetime.combine(agenda_date, datetime.max.time(), tzinfo=bangkok_tz)
     elif target_date == "day_after_tomorrow":
         agenda_date = (now + timedelta(days=2)).date()
         date_label = "มะรืนนี้"
+        date_start = datetime.combine(agenda_date, datetime.min.time(), tzinfo=bangkok_tz)
+        date_end = datetime.combine(agenda_date, datetime.max.time(), tzinfo=bangkok_tz)
     elif target_date == "today":
         agenda_date = now.date()
         date_label = "วันนี้"
+        date_start = datetime.combine(agenda_date, datetime.min.time(), tzinfo=bangkok_tz)
+        date_end = datetime.combine(agenda_date, datetime.max.time(), tzinfo=bangkok_tz)
+    elif target_date == "this_week":
+        date_label = "สัปดาห์นี้"
+        date_start = datetime.combine(now.date(), datetime.min.time(), tzinfo=bangkok_tz)
+        # Find end of week (Sunday)
+        days_to_sunday = 6 - now.weekday()
+        sunday_date = (now + timedelta(days=days_to_sunday)).date()
+        date_end = datetime.combine(sunday_date, datetime.max.time(), tzinfo=bangkok_tz)
+    elif target_date == "this_month":
+        date_label = "เดือนนี้"
+        date_start = datetime.combine(now.date(), datetime.min.time(), tzinfo=bangkok_tz)
+        # Find end of month
+        import calendar
+        last_day = calendar.monthrange(now.year, now.month)[1]
+        end_date = now.replace(day=last_day).date()
+        date_end = datetime.combine(end_date, datetime.max.time(), tzinfo=bangkok_tz)
+    elif target_date == "this_year":
+        date_label = "ปีนี้"
+        date_start = datetime.combine(now.date(), datetime.min.time(), tzinfo=bangkok_tz)
+        end_date = now.replace(month=12, day=31).date()
+        date_end = datetime.combine(end_date, datetime.max.time(), tzinfo=bangkok_tz)
     else:
         try:
             from datetime import date as date_type
             agenda_date = date_type.fromisoformat(target_date)
             date_label = f"วันที่ {agenda_date.strftime('%d/%m/%Y')}"
+            date_start = datetime.combine(agenda_date, datetime.min.time(), tzinfo=bangkok_tz)
+            date_end = datetime.combine(agenda_date, datetime.max.time(), tzinfo=bangkok_tz)
         except Exception:
             agenda_date = now.date()
             date_label = "วันนี้"
-    
-    date_start = datetime.combine(agenda_date, datetime.min.time(), tzinfo=bangkok_tz)
-    date_end = datetime.combine(agenda_date, datetime.max.time(), tzinfo=bangkok_tz)
+            date_start = datetime.combine(agenda_date, datetime.min.time(), tzinfo=bangkok_tz)
+            date_end = datetime.combine(agenda_date, datetime.max.time(), tzinfo=bangkok_tz)
     
     logger.info(f"[Agenda] date_label={date_label}, start={date_start.isoformat()}, end={date_end.isoformat()}, timezone=Asia/Bangkok")
     
@@ -668,11 +695,15 @@ async def get_response_for_action(
     
     # ===== calendar_query =====
     if action == "calendar_query":
-        # Simply reuse the agenda builder but focused on today/tomorrow
-        query_text = extracted_fields.get("query", "").lower()
-        target = "today"
-        if "พรุ่งนี้" in query_text:
-            target = "tomorrow"
+        # Simply reuse the agenda builder but focused on today/tomorrow or detected range
+        target = extracted_fields.get("date", "today")
+        # Legacy support for query text if date not found
+        if not extracted_fields.get("date"):
+            query_text = extracted_fields.get("query", "").lower()
+            if "พรุ่งนี้" in query_text:
+                target = "tomorrow"
+            elif any(kw in query_text for kw in ["อาทิตย์", "สัปดาห์", "วีค"]):
+                target = "this_week"
         
         agenda = _build_agenda_response(user_id, user_name, target)
         
