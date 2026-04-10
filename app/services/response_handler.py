@@ -737,9 +737,6 @@ async def get_response_for_action(
         
         # Save to DB
         try:
-            from app.repositories.reminder_repository import ReminderRepository
-            reminder_repo = ReminderRepository()
-            
             # HARDENING: Add debug logging for DB write
             logger.info(f"[Hardening] db_write_attempt user_id={user_id} message={normalized_message[:30]}")
             
@@ -907,9 +904,6 @@ async def get_response_for_action(
 
         if not user_id:
             return f"{user_name}ขอโทษครับ ไม่สามารถยกเลิกนัดหมายได้ในตอนนี้", False
-        
-        from app.repositories.reminder_repository import ReminderRepository
-        reminder_repo = ReminderRepository()
         
         # Step 1: Initial search (if no matches yet)
         if not matches:
