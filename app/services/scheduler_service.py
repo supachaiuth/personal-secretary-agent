@@ -493,6 +493,7 @@ class ProactiveScheduler:
                 
                 if user.get("google_refresh_token"):
                     await calendar_sync_service.sync_google_calendar(user_id, line_user_id)
+                    # Note: sync_google_calendar already updates last_synced_at now
         except Exception as e:
             logger.error(f"[SCHEDULER] Error during periodic calendar sync: {e}")
 

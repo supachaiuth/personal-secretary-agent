@@ -117,7 +117,6 @@ curl http://127.0.0.1:8000/health/db
 ## Limitations
 
 - No tool execution (Phase 7+)
-- No calendar integration
 - No memory/persistence
 - No LINE rich menu
 

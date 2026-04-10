@@ -80,6 +80,11 @@ class CalendarSyncService:
                     on_conflict="external_id,source"
                 ).execute()
                 
+            # 4. Update last_synced_at in users table
+            self.supabase.table("users").update({
+                "last_synced_at": datetime.now(timezone.utc).isoformat()
+            }).eq("line_user_id", line_user_id).execute()
+            
             return True
         except Exception as e:
             logger.error(f"Error syncing Google Calendar for {user_id}: {e}")
@@ -158,5 +163,25 @@ class CalendarSyncService:
         except Exception as e:
             logger.error(f"Error creating Google event for {line_user_id}: {e}")
             return None
+
+    async def delete_google_event(self, line_user_id: str, event_id: str):
+        """Delete an event from Google Calendar."""
+        try:
+            user_res = self.supabase.table("users").select("google_refresh_token").eq("line_user_id", line_user_id).execute()
+            if not user_res.data or not user_res.data[0].get("google_refresh_token"):
+                return False
+            
+            refresh_token = user_res.data[0]["google_refresh_token"]
+            service = self._get_google_service(refresh_token)
+            
+            service.events().delete(calendarId='primary', eventId=event_id).execute()
+            
+            # Also delete from local calendar_events table
+            self.supabase.table("calendar_events").delete().eq("external_id", event_id).execute()
+            
+            return True
+        except Exception as e:
+            logger.error(f"Error deleting Google event {event_id} for {line_user_id}: {e}")
+            return False
 
 calendar_sync_service = CalendarSyncService()

@@ -23,6 +23,7 @@ import logging
 import os
 from app.config import Settings
 from app.services.calendar_sync_service import calendar_sync_service
+from app.api.auth import REDIRECT_URI
 logger = logging.getLogger(__name__)
 
 _settings = Settings()
@@ -343,6 +344,45 @@ def _format_thai_datetime(iso_string: str) -> str:
         return iso_string
 
 
+async def ensure_recent_sync(user_id: str, line_user_id: str):
+    """
+    Check if the user's calendar was synced recently (last 5 minutes).
+    If not, trigger a sync.
+    """
+    try:
+        from datetime import datetime, timezone, timedelta
+        
+        user_res = user_repo.get_by_line_user_id(line_user_id)
+        if not user_res.data:
+            return
+            
+        user = user_res.data[0]
+        last_synced_str = user.get("last_synced_at")
+        google_token = user.get("google_refresh_token")
+        
+        if not google_token:
+            return # Not connected, nothing to sync
+            
+        should_sync = False
+        if not last_synced_str:
+            should_sync = True
+        else:
+            try:
+                last_synced = datetime.fromisoformat(last_synced_str.replace("Z", "+00:00"))
+                if datetime.now(timezone.utc) - last_synced > timedelta(minutes=5):
+                    should_sync = True
+            except (ValueError, TypeError):
+                should_sync = True
+                
+        if should_sync:
+            logger.info(f"[SoftSync] Triggering on-demand sync for user {user_id}")
+            # Run sync (await it because it's for immediate query)
+            await calendar_sync_service.sync_google_calendar(user_id, line_user_id)
+            
+    except Exception as e:
+        logger.error(f"[SoftSync] Error: {e}")
+
+
 def _build_agenda_response(user_id: Optional[str], user_name: str, target_date: str = "tomorrow") -> str:
     """Build agenda response for a specific date (tomorrow/today)."""
     if not user_id:
@@ -567,6 +607,10 @@ async def get_response_for_action(
     
     # ===== agenda_query =====
     if action == "agenda_query":
+        # Ensure data is fresh
+        if user_id:
+            await ensure_recent_sync(user_id, line_user_id)
+        
         target_date = extracted_fields.get("date", "tomorrow")
         return _build_agenda_response(user_id, user_name, target_date), True
     
@@ -719,6 +763,10 @@ async def get_response_for_action(
     
     # ===== calendar_query =====
     if action == "calendar_query":
+        # Ensure data is fresh
+        if user_id:
+            await ensure_recent_sync(user_id, line_user_id)
+            
         # Simply reuse the agenda builder but focused on today/tomorrow or detected range
         target = extracted_fields.get("date", "today")
         
@@ -813,11 +861,24 @@ async def get_response_for_action(
                 try:
                     # Map Thai-calculated remind_at to Google start_time
                     # (remind_at is already ISO formatted)
-                    calendar_sync_service.create_google_event(
+                    created_event = await calendar_sync_service.create_google_event(
                         line_user_id=line_user_id,
                         title=message,
                         start_time=remind_at
                     )
+                    
+                    if created_event and created_event.get("id"):
+                        # Save external_id to local repository to allow later deletion
+                        # We find the reminder we just created (assuming same message/time)
+                        # Actually, better to pass the external_id to reminder_repo.create
+                        # Let's perform a post-update since repo.create currently doesn't support external_id
+                        try:
+                            new_rem = reminder_repo.find_duplicate(user_id, message, remind_at)
+                            if new_rem:
+                                reminder_repo.update(new_rem['id'], external_id=created_event['id'])
+                        except Exception as upd_err:
+                            logger.error(f"[GoogleCalendar] Failed to link external_id: {upd_err}")
+                            
                     return f"✅ บันทึกนัดหมาย '{message}' {formatted_time} เรียบร้อยครับ (และเพิ่มลง Google Calendar ให้แล้ว 🗓️)", True
                 except Exception as g_err:
                     logger.error(f"[GoogleCalendar] Error creating event: {g_err}")
@@ -904,9 +965,18 @@ async def get_response_for_action(
             # Execute deletion
             rem_id = selected_rem.get("id")
             rem_msg = selected_rem.get("message")
+            ext_id = selected_rem.get("external_id")
+            
             try:
+                # 1. Delete from LINE reminders
                 reminder_repo.delete(rem_id)
                 activity_repo.log_activity(user_id, "reminder_deleted", {"message": rem_msg})
+                
+                # 2. If it was a Google event, delete it from there too
+                if ext_id:
+                    logger.info(f"[ResponseHandler] Deleting linked Google event {ext_id}")
+                    await calendar_sync_service.delete_google_event(line_user_id, ext_id)
+                
                 logger.info(f"[ResponseHandler] Canceled reminder {rem_id} for user {user_id}")
                 return f"✅ ยกเลิกการตั้งเตือน '{rem_msg}' เรียบร้อยแล้วครับ", True
             except Exception as e:
